@@ -49,7 +49,6 @@ function VehicleSelector({ sessionInfo, onVehicleSelect, commonStyles }) {
                         setCurrentSelectedId(result[0].id);
                         onVehicleSelect(result[0].id);
                     }
-                    console.log('Devices fetched:', result);
                 } else if (response.data.error) {
                     setVehiclesError(response.data.error.message || 'Failed to fetch vehicles.');
                     console.error('Geotab API Error fetching devices:', response.data.error);
@@ -89,10 +88,10 @@ function VehicleSelector({ sessionInfo, onVehicleSelect, commonStyles }) {
                         id="vehicle-select"
                         value={currentSelectedId}
                         onChange={handleSelectChange}
-                        style={commonStyles.input} 
+                        style={{...commonStyles.input, width: 'fit-content', textAlign: 'center'}}
                     >
                         {vehicles.map(vehicle => (
-                            <option key={vehicle.id} value={vehicle.id}>
+                            <option key={vehicle.id} value={vehicle.id}style={{textAlign:'center'}}>
                                 {vehicle.name || vehicle.id}
                             </option>
                         ))}

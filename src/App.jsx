@@ -60,7 +60,7 @@ function App() {
                     server: server
                 });
                 setIsAuthenticated(true);
-                console.log('Login successful:', result);
+                console.log('Login successful');
             } else if (response.data.error) {
                 setError(response.data.error.message || 'Authentication failed.');
                 console.error('Geotab API Error:', response.data.error);
@@ -85,7 +85,6 @@ function App() {
 
     const handleVehicleSelected = (vehicleId) => {
         setSelectedVehicleId(vehicleId);
-        console.log('Selected Vehicle ID in App.jsx:', vehicleId);
     };
 
     return (

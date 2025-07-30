@@ -62,7 +62,7 @@ function calculateDistance(latlon1, latlon2) {
 /**
  * Checks if a point is inside a polygon using the ray-casting algorithm.
  * @param {object} point - {latitude, longitude}
- * @param {Array<Array<number>>} polygon - Array of [latitude, longitude] arrays
+ * @param {object} latlon2 - {latitude, longitude}
  * @returns {boolean} True if point is inside, false otherwise
  */
 function isPointInPolygon(point, polygon) {
@@ -135,8 +135,174 @@ async function fetchOdometer(sessionInfo, deviceId) {
     return latestOdometer;
 }
 
+// NEW: Function to fetch fuel consumption data
+async function fetchFuelConsumption(sessionInfo, deviceId) {
+    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+    
+    // Define possible fuel diagnostic IDs to try
+    const fuelDiagnostics = [
+        "DiagnosticDeviceTotalFuelId",
+        "DiagnosticFuelUsedId",
+        "DiagnosticFuelLevelId",
+        "DiagnosticOBDFuelLevelInputId",
+        "DiagnosticJ1939FuelLevelId",
+        "DiagnosticJ1708FuelLevelId"
+    ];
+
+    // Get data from the last 24 hours for current fuel status
+    const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const toDate = new Date().toISOString();
+
+    let fuelData = {
+        totalFuel: null,
+        fuelLevel: null,
+        fuelEfficiency: null,
+        lastUpdated: null
+    };
+
+    for (const diagId of fuelDiagnostics) {
+        try {
+            const response = await axios.post(apiUrl, {
+                jsonrpc: '2.0',
+                method: 'Get',
+                params: {
+                    typeName: 'StatusData',
+                    search: {
+                        deviceSearch: { id: deviceId },
+                        diagnosticSearch: { id: diagId },
+                        fromDate,
+                        toDate
+                    },
+                    credentials: {
+                        database: sessionInfo.database,
+                        userName: sessionInfo.userName,
+                        sessionId: sessionInfo.sessionId,
+                    },
+                },
+                id: Math.floor(Math.random() * 10000),
+            }, {
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const result = response.data.result;
+            if (result && result.length > 0) {
+                // Sort by dateTime descending to get the latest
+                const sorted = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
+                const latestReading = sorted[0];
+                
+                if (latestReading.data !== undefined && latestReading.data !== null) {
+                    // Determine what type of fuel data this is based on diagnostic ID
+                    if (diagId.includes('TotalFuel') || diagId.includes('FuelUsed')) {
+                        fuelData.totalFuel = latestReading.data;
+                        fuelData.lastUpdated = latestReading.dateTime;
+                    } else if (diagId.includes('FuelLevel')) {
+                        fuelData.fuelLevel = latestReading.data;
+                        fuelData.lastUpdated = latestReading.dateTime;
+                    }
+                    
+                }
+            }
+        } catch (err) {
+            console.warn(`Could not fetch fuel data for ${diagId}:`, err.message);
+        }
+    }
+
+    return fuelData;
+}
+
+// NEW: Function to calculate fuel efficiency for a time period
+async function calculateFuelEfficiency(sessionInfo, deviceId, hours = 24) {
+    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+    const fromDate = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const toDate = new Date().toISOString();
+
+    try {
+        // Use multiCall to get both odometer and fuel data simultaneously
+        const response = await axios.post(apiUrl, {
+            jsonrpc: '2.0',
+            method: 'MultiCall',
+            params: {
+                calls: [
+                    // Get odometer data
+                    {
+                        method: 'Get',
+                        params: {
+                            typeName: 'StatusData',
+                            search: {
+                                fromDate,
+                                toDate,
+                                diagnosticSearch: { id: 'DiagnosticOdometerAdjustmentId' },
+                                deviceSearch: { id: deviceId }
+                            }
+                        }
+                    },
+                    // Get total fuel data
+                    {
+                        method: 'Get',
+                        params: {
+                            typeName: 'StatusData',
+                            search: {
+                                fromDate,
+                                toDate,
+                                diagnosticSearch: { id: 'DiagnosticDeviceTotalFuelId' },
+                                deviceSearch: { id: deviceId }
+                            }
+                        }
+                    }
+                ],
+                credentials: {
+                    database: sessionInfo.database,
+                    userName: sessionInfo.userName,
+                    sessionId: sessionInfo.sessionId,
+                }
+            },
+            id: Math.floor(Math.random() * 10000),
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const results = response.data.result;
+        
+        if (results && results.length >= 2) {
+            const odometerData = results[0];
+            const fuelUsedData = results[1];
+
+            if (odometerData.length === 0 || fuelUsedData.length === 0) {
+                console.log("Insufficient data for fuel efficiency calculation");
+                return null;
+            }
+
+            // Sort data by dateTime
+            const sortedOdometer = odometerData.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+            const sortedFuel = fuelUsedData.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+            // Calculate distance traveled and fuel consumed
+            const distance = sortedOdometer[sortedOdometer.length - 1].data - sortedOdometer[0].data;
+            const fuelUsed = sortedFuel[sortedFuel.length - 1].data - sortedFuel[0].data;
+
+            if (distance === 0) {
+                console.log("Device has not traveled in this time period");
+                return null;
+            }
+
+            // Calculate efficiency in L/100KM
+            const efficiency = (fuelUsed / (distance / 1000)) * 100;
+            
+            return {
+                efficiency: efficiency,
+                distance: distance / 1000, // Convert to km
+                fuelUsed: fuelUsed,
+                period: hours
+            };
+        }
+    } catch (err) {
+        console.warn("Could not calculate fuel efficiency:", err.message);
+    }
+    
+    return null;
+}
+
 function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip }) {
-    console.log('VehicleMap: selectedTrip prop:', selectedTrip);
 
     const [vehicleLocation, setVehicleLocation] = useState(null);
     const [isLoadingLocation, setIsLoadingLocation] = useState(false);
@@ -147,6 +313,15 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     const [zonesError, setZonesError] = useState(null);
 
     const [currentGeofenceStatus, setCurrentGeofenceStatus] = useState("Determining status...");
+    
+    // NEW: State for fuel data
+    const [fuelData, setFuelData] = useState({
+        totalFuel: null,
+        fuelLevel: null,
+        fuelEfficiency: null,
+        lastUpdated: null
+    });
+    const [isLoadingFuel, setIsLoadingFuel] = useState(false);
 
     // Function to fetch zones (runs once when sessionInfo is available)
     const fetchZones = async () => {
@@ -183,7 +358,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
 
             if (result) {
                 setZones(result);
-                console.log('Zones fetched:', result);
             } else if (response.data.error) {
                 setZonesError(response.data.error.message || 'Failed to fetch zones.');
                 console.error('Geotab API Error fetching zones:', response.data.error);
@@ -257,7 +431,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                     bearing: latestStatus.bearing,
                     odometer
                 });
-                console.log('Vehicle location fetched:', latestStatus);
             } else {
                 setVehicleLocation(null); // No data found
                 console.log('No DeviceStatusInfo found for this vehicle.');
@@ -270,9 +443,37 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
+    // NEW: Function to fetch fuel data
+    const fetchFuelData = async () => {
+        if (!sessionInfo || !selectedVehicleId) {
+            return;
+        }
+
+        setIsLoadingFuel(true);
+        
+        try {
+            // Fetch current fuel consumption data
+            const currentFuel = await fetchFuelConsumption(sessionInfo, selectedVehicleId);
+            
+            // Try to calculate fuel efficiency
+            const efficiency = await calculateFuelEfficiency(sessionInfo, selectedVehicleId, 24);
+            
+            setFuelData({
+                ...currentFuel,
+                fuelEfficiency: efficiency
+            });
+            
+        } catch (err) {
+            console.error('Error fetching fuel data:', err);
+        } finally {
+            setIsLoadingFuel(false);
+        }
+    };
+
     // Fetch initial location when selectedVehicleId or sessionInfo changes
     useEffect(() => {
         fetchVehicleLocation();
+        fetchFuelData(); // NEW: Also fetch fuel data
     }, [selectedVehicleId, sessionInfo]);
 
     // Effect to determine Geofence Status whenever vehicleLocation or zones change
@@ -312,7 +513,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     }, [vehicleLocation, zones]);
 
-
     const defaultMapCenter = [45.4215, -75.6972]; // Ottawa, Canada
     const currentPosition = vehicleLocation ? [vehicleLocation.latitude, vehicleLocation.longitude] : defaultMapCenter;
 
@@ -331,6 +531,31 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     };
 
     const tripPolylinePositions = getTripPolyline(selectedTrip);
+
+    // NEW: Function to format fuel display
+    const formatFuelDisplay = () => {
+        if (isLoadingFuel) return 'Loading...';
+        
+        const parts = [];
+        
+        if (fuelData.totalFuel !== null) {
+            parts.push(`Total: ${fuelData.totalFuel.toFixed(1)}L`);
+        }
+        
+        if (fuelData.fuelLevel !== null) {
+            // Check if fuel level is a percentage (0-100) or absolute value
+            const levelValue = fuelData.fuelLevel <= 100 ? 
+                `${fuelData.fuelLevel.toFixed(1)}%` : 
+                `${fuelData.fuelLevel.toFixed(1)}L`;
+            parts.push(`Level: ${levelValue}`);
+        }
+        
+        if (fuelData.fuelEfficiency && fuelData.fuelEfficiency.efficiency) {
+            parts.push(`Efficiency: ${fuelData.fuelEfficiency.efficiency.toFixed(2)}L/100km`);
+        }
+        
+        return parts.length > 0 ? parts.join(' | ') : 'N/A';
+    };
 
     return (
         <div style={commonStyles.form}>
@@ -389,6 +614,7 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                         Time: {new Date(vehicleLocation.dateTime).toLocaleTimeString()} <br/>
                                         Date: {new Date(vehicleLocation.dateTime).toLocaleDateString()}
                                         <br/> <strong>Geofence:</strong> {currentGeofenceStatus}
+                                        <br/> <strong>Fuel:</strong> {formatFuelDisplay()}
                                     </Popup>
                                 </Marker>
                             )}
@@ -396,7 +622,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                             {/* Render selected trip polyline if available */}
                             {tripPolylinePositions.length > 0 && (
                                 <>
-                                    {console.log('VehicleMap: Rendering Polyline with positions:', tripPolylinePositions)}
                                     <Polyline
                                         positions={tripPolylinePositions}
                                         pathOptions={{ color: 'orange', weight: 4, opacity: 0.8 }}
@@ -414,14 +639,7 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 <p><strong>Last Updated:</strong> {new Date(vehicleLocation.dateTime).toLocaleString()}</p>
                                 <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
                                 <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
-                                <p>
-                                    <strong>Fuel:</strong> {
-                                        vehicleLocation.fuelUsed !== undefined ? `${vehicleLocation.fuelUsed} L` :
-                                        vehicleLocation.fuel !== undefined ? `${vehicleLocation.fuel} L` :
-                                        vehicleLocation.fuelLevel !== undefined ? `${vehicleLocation.fuelLevel} %` :
-                                        'N/A'
-                                    }
-                                </p>
+                                <p><strong>Fuel:</strong> {formatFuelDisplay()}</p>
                                 <p>
                                     <strong>Odometer:</strong> {
                                         vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
@@ -430,11 +648,29 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                     }
                                 </p>
                                 <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
+                                {/* NEW: Show detailed fuel efficiency if available */}
+                                {fuelData.fuelEfficiency && (
+                                    <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
+                                        <p><strong>24h Fuel Stats:</strong></p>
+                                        <p>Distance: {fuelData.fuelEfficiency.distance.toFixed(1)} km</p>
+                                        <p>Fuel Used: {fuelData.fuelEfficiency.fuelUsed.toFixed(2)} L</p>
+                                        <p>Efficiency: {fuelData.fuelEfficiency.efficiency.toFixed(2)} L/100km</p>
+                                    </div>
+                                )}
                             </div>
-                            <button onClick={fetchVehicleLocation} style={commonStyles.button}>Refresh Location</button>
+                            <button 
+                                onClick={() => {
+                                    fetchVehicleLocation();
+                                    fetchFuelData(); // NEW: Also refresh fuel data
+                                }} 
+                                style={commonStyles.button}
+                                disabled={isLoadingLocation || isLoadingFuel}
+                            >
+                                {(isLoadingLocation || isLoadingFuel) ? 'Refreshing...' : 'Refresh Location & Fuel'}
+                            </button>
                         </div>
                     )}
-                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location' to fetch it.</p>}
+                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location & Fuel' to fetch it.</p>}
                 </>
             )}
         </div>

@@ -50,9 +50,6 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
                 });
 
                 const result = response.data.result;
-                // --- NEW CONSOLE LOG START ---
-                console.log('Trip API result (summaries):', result);
-                // --- NEW CONSOLE LOG END ---
                 if (result) {
                     setTrips(result);
                 } else if (response.data.error) {
@@ -104,17 +101,13 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
             });
 
             const result = response.data.result;
-            // --- NEW CONSOLE LOGS START ---
-            console.log('LogRecord API raw result for trip:', trip.id, result); // This logs the raw array of log records
-            // --- NEW CONSOLE LOGS END ---
+
             if (result) {
                 // Filter out invalid points and map to [latitude, longitude] format
                 const path = result
                     .filter(log => typeof log.latitude === 'number' && typeof log.longitude === 'number')
                     .map(log => [log.latitude, log.longitude]);
-                // --- NEW CONSOLE LOGS START ---
-                console.log('Processed trip path for trip:', trip.id, path); // This logs the final array of [lat, lng] pairs
-                // --- NEW CONSOLE LOGS END ---
+
                 return path;
             } else if (response.data.error) {
                 console.error('Geotab API Error fetching log records:', response.data.error);
@@ -147,15 +140,28 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
         const selectedTripSummary = trips.find(t => t.id === tripId);
 
         if (selectedTripSummary) {
-            // Fetch detailed log records for the selected trip
-            const tripPath = await fetchTripLogRecords(selectedTripSummary);
+            setIsLoadingTrips(true); // Show loading while fetching detailed data
             
-            // Combine summary info with the fetched path
-            const fullTripData = { ...selectedTripSummary, path: tripPath };
-            setTripInfo(fullTripData); // Update local state for display
+            try {
+                // Fetch detailed log records for the selected trip
+                const tripPath = await fetchTripLogRecords(selectedTripSummary);
+                
+                // Combine summary info with the fetched path
+                const fullTripData = { 
+                    ...selectedTripSummary, 
+                    path: tripPath,
+                };
+                
+                setTripInfo(fullTripData); // Update local state for display
 
-            if (onTripSelect) {
-                onTripSelect(fullTripData); // Pass the full trip data (with path) to the parent
+                if (onTripSelect) {
+                    onTripSelect(fullTripData); // Pass the full trip data (with path) to the parent
+                }
+            } catch (err) {
+                console.error('Error fetching trip details:', err);
+                setTripsError('Failed to fetch trip details.');
+            } finally {
+                setIsLoadingTrips(false);
             }
         } else {
             setTripInfo(null);
@@ -166,7 +172,6 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
     };
 
     function formatTripDate(dateStr) {
-    
         return new Date(dateStr).toLocaleString();
     }
 
@@ -200,7 +205,7 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
                 <div style={{ marginTop: '1em', background: '#f8f9fa', padding: '1em', borderRadius: '8px' }}>
                     <p><strong>Average Speed:</strong> {tripInfo.averageSpeed ? tripInfo.averageSpeed.toFixed(1) : 'N/A'} km/h</p>
                     <p><strong>Distance Traveled:</strong> {tripInfo.distance ? (tripInfo.distance / 1000).toFixed(2) : 'N/A'} km</p>
-                    <p><strong>Fuel Consumption:</strong> {tripInfo.fuelUsed ? tripInfo.fuelUsed.toFixed(2) : 'N/A'} L</p>
+                    
                     {tripInfo.path && tripInfo.path.length > 0 && (
                         <p><strong>Path Points:</strong> {tripInfo.path.length} points</p>
                     )}
