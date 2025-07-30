@@ -36,6 +36,49 @@ function MapUpdater({ center, polylinePositions }) {
     return null;
 }
 
+// NEW: Function to fetch fault codes for the selected vehicle
+async function fetchFaultCodes(sessionInfo, deviceId) {
+    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+    
+    try {
+        // Get fault data from entire history - we'll fetch all historical faults
+        const response = await axios.post(apiUrl, {
+            jsonrpc: '2.0',
+            method: 'Get',
+            params: {
+                typeName: 'FaultData',
+                search: {
+                    deviceSearch: { id: deviceId },
+                    // Get both active and inactive faults from all time
+                    // Remove date filters to get entire history
+                },
+                credentials: {
+                    database: sessionInfo.database,
+                    userName: sessionInfo.userName,
+                    sessionId: sessionInfo.sessionId,
+                },
+            },
+            id: Math.floor(Math.random() * 10000),
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = response.data.result;
+        if (result) {
+            // Sort fault codes by date, most recent first
+            const sortedFaults = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
+            return sortedFaults;
+        } else if (response.data.error) {
+            console.error('Geotab API Error fetching fault codes:', response.data.error);
+            throw new Error(response.data.error.message || 'Failed to fetch fault codes.');
+        }
+        return [];
+    } catch (err) {
+        console.error('Error fetching fault codes:', err);
+        throw err;
+    }
+}
+
 /**
  * Calculates the distance between two points on the Earth (Haversine formula).
  * Used for point-in-circle test.
@@ -323,6 +366,11 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     });
     const [isLoadingFuel, setIsLoadingFuel] = useState(false);
 
+    // NEW: State for fault codes
+    const [faultCodes, setFaultCodes] = useState([]);
+    const [isLoadingFaults, setIsLoadingFaults] = useState(false);
+    const [faultsError, setFaultsError] = useState(null);
+
     // Function to fetch zones (runs once when sessionInfo is available)
     const fetchZones = async () => {
         if (!sessionInfo || !sessionInfo.sessionId) {
@@ -470,10 +518,31 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
+    // NEW: Function to fetch fault codes
+    const fetchFaultData = async () => {
+        if (!sessionInfo || !selectedVehicleId) {
+            return;
+        }
+
+        setIsLoadingFaults(true);
+        setFaultsError(null);
+        
+        try {
+            const faults = await fetchFaultCodes(sessionInfo, selectedVehicleId);
+            setFaultCodes(faults);
+        } catch (err) {
+            console.error('Error fetching fault codes:', err);
+            setFaultsError(err.message || 'Failed to fetch fault codes');
+        } finally {
+            setIsLoadingFaults(false);
+        }
+    };
+
     // Fetch initial location when selectedVehicleId or sessionInfo changes
     useEffect(() => {
         fetchVehicleLocation();
         fetchFuelData(); // NEW: Also fetch fuel data
+        fetchFaultData(); // NEW: Also fetch fault data
     }, [selectedVehicleId, sessionInfo]);
 
     // Effect to determine Geofence Status whenever vehicleLocation or zones change
@@ -635,42 +704,88 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                     </div>
                     {vehicleLocation && (
                         <div style={styles.infoActionWrapper}>
-                            <div style={styles.infoBox}>
-                                <p><strong>Last Updated:</strong> {new Date(vehicleLocation.dateTime).toLocaleString()}</p>
-                                <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
-                                <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
-                                <p><strong>Fuel:</strong> {formatFuelDisplay()}</p>
-                                <p>
-                                    <strong>Odometer:</strong> {
-                                        vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
-                                        ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
-                                        : 'N/A'
-                                    }
-                                </p>
-                                <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
-                                {/* NEW: Show detailed fuel efficiency if available */}
-                                {fuelData.fuelEfficiency && (
-                                    <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
-                                        <p><strong>24h Fuel Stats:</strong></p>
-                                        <p>Distance: {fuelData.fuelEfficiency.distance.toFixed(1)} km</p>
-                                        <p>Fuel Used: {fuelData.fuelEfficiency.fuelUsed.toFixed(2)} L</p>
-                                        <p>Efficiency: {fuelData.fuelEfficiency.efficiency.toFixed(2)} L/100km</p>
+                            <div style={styles.dataCardsContainer}>
+                                    {/* Vehicle Info Card */}
+                                    <div style={styles.infoBox}>
+                                        {/* NEW: Title for Vehicle Info Card */}
+                                        <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>
+                                            Vehicle Information
+                                        </p>
+                                        <p><strong>Last Updated:</strong> {new Date(vehicleLocation.dateTime).toLocaleString()}</p>
+                                        <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
+                                        <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
+                                        <p><strong>Fuel:</strong> {formatFuelDisplay()}</p>
+                                        <p>
+                                            <strong>Odometer:</strong> {
+                                                vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
+                                                ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
+                                                : 'N/A'
+                                            }
+                                        </p>
+                                        <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
+                                        {/* NEW: Show detailed fuel efficiency if available */}
+                                        {fuelData.fuelEfficiency && (
+                                            <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
+                                                <p><strong>24h Fuel Stats:</strong></p>
+                                                <p>Distance: {fuelData.fuelEfficiency.distance.toFixed(1)} km</p>
+                                                <p>Fuel Used: {fuelData.fuelEfficiency.fuelUsed.toFixed(2)} L</p>
+                                                <p>Efficiency: {fuelData.fuelEfficiency.efficiency.toFixed(2)} L/100km</p>
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </div>
+
+                                    {/* NEW: Fault Codes Card */}
+                                    <div style={styles.faultCodesBox}>
+                                        <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' , textAlign: 'center'}}>
+                                            Fault Codes
+                                        </p>
+                                        {isLoadingFaults && <p style={{ fontSize: '0.8em', color: '#666' }}>Loading fault codes...</p>}
+                                        {faultsError && <p style={{ fontSize: '0.8em', color: 'red' }}>Error: {faultsError}</p>}
+                                        {!isLoadingFaults && !faultsError && (
+                                            <div style={styles.faultCodesContent}>
+                                                {faultCodes.length === 0 ? (
+                                                    <p style={{ fontSize: '0.8em', color: '#666', fontStyle: 'italic' }}>No fault codes found</p>
+                                                ) : (
+                                                    <div style={styles.faultCodesList}>
+                                                        {faultCodes.slice(0, 5).map((fault, index) => (
+                                                            <div key={index} style={styles.faultCodeItem}>
+                                                                <div style={{ fontSize: '0.75em', color: '#888' }}>
+                                                                    {new Date(fault.dateTime).toLocaleDateString()}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.8em', fontWeight: 'bold' }}>
+                                                                    {fault.diagnostic?.name || fault.diagnostic?.id || 'Unknown'}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.75em', color: fault.faultState === 'Active' ? 'red' : 'orange' }}>
+                                                                    {fault.faultState || 'Unknown State'}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                        {faultCodes.length > 5 && (
+                                                            <div style={{ fontSize: '0.75em', color: '#666', textAlign: 'center', marginTop: '5px' }}>
+                                                                ...and {faultCodes.length - 5} more
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
                             <button 
                                 onClick={() => {
                                     fetchVehicleLocation();
                                     fetchFuelData(); // NEW: Also refresh fuel data
+                                    fetchFaultData(); // NEW: Also refresh fault data
                                 }} 
                                 style={commonStyles.button}
-                                disabled={isLoadingLocation || isLoadingFuel}
+                                disabled={isLoadingLocation || isLoadingFuel || isLoadingFaults}
                             >
-                                {(isLoadingLocation || isLoadingFuel) ? 'Refreshing...' : 'Refresh Location & Fuel'}
+                                {(isLoadingLocation || isLoadingFuel || isLoadingFaults) ? 'Refreshing...' : 'Refresh Location, Fuel & Faults'}
                             </button>
                         </div>
                     )}
-                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location & Fuel' to fetch it.</p>}
+                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location, Fuel & Faults' to fetch it.</p>}
                 </>
             )}
         </div>
@@ -689,6 +804,22 @@ const styles = {
         width: '100%',
         height: '100%',
     },
+    infoActionWrapper: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        width: '100%',
+    },
+    dataCardsContainer: {
+        display: 'flex',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'flex-start',
+        gap: '15px',
+        width: '100%',
+        marginBottom: '0.5em',
+        flexWrap: 'wrap',
+    },
     infoBox: {
         backgroundColor: '#f0f0f0',
         padding: '10px',
@@ -699,13 +830,38 @@ const styles = {
         maxWidth: '350px',
         textAlign: 'center',
         display: 'inline-block',
-        marginBottom: '0.5em',
+        flex: '1',
+        minWidth: '250px',
     },
-    infoActionWrapper: {
+    faultCodesBox: {
+        backgroundColor: '#f8f9fa',
+        padding: '10px',
+        borderRadius: '5px',
+        fontSize: '0.9em',
+        width: 'auto',
+        minWidth: '200px',
+        maxWidth: '350px',
+        textAlign: 'left',
+        display: 'inline-block',
+        flex: '1',
+        minWidth: '250px',
+        border: '1px solid #e9ecef',
+    },
+    faultCodesContent: {
+        maxHeight: '200px',
+        overflowY: 'auto',
+    },
+    faultCodesList: {
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        width: '100%',
+        gap: '8px',
+    },
+    faultCodeItem: {
+        padding: '6px',
+        backgroundColor: '#fff',
+        borderRadius: '3px',
+        border: '1px solid #e9ecef',
+        fontSize: '0.8em',
     },
 };
 
