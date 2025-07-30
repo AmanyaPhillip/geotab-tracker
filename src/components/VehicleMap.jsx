@@ -1,352 +1,23 @@
 // VehicleMap.jsx
-import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polygon, Circle, Polyline, useMap } from 'react-leaflet';
+import React, { useState, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polygon, Circle, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
-import axios from 'axios';
-import myMarkerIcon from '../assets/my-marker.png';
 
-// Fix for default Leaflet marker icons not showing up with Webpack/Vite
-delete L.Icon.Default.prototype._get;
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
-    iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
-    shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
-});
+// Import functions from the new utility file
+import {
+    fetchFaultCodes,
+    calculateDistance,
+    isPointInPolygon,
+    fetchOdometer,
+    fetchFuelConsumption,
+    calculateFuelEfficiency
+} from './vehicleUtils';
 
-const customIcon = L.icon({
-    iconUrl: myMarkerIcon,
-    iconSize: [50, 50],
-    iconAnchor: [25, 50],
-    popupAnchor: [0, -50],
-});
+// Import components and styles from the new MapComponents file
+import { MapUpdater, FaultDetailModal, customIcon, styles } from './MapComponents';
 
-// MODIFIED MapUpdater to fit bounds
-function MapUpdater({ center, polylinePositions }) {
-    const map = useMap();
-    useEffect(() => {
-        if (polylinePositions && polylinePositions.length > 0) {
-            // Create a LatLngBounds object from the polyline positions
-            const bounds = L.latLngBounds(polylinePositions);
-            map.fitBounds(bounds, { padding: [50, 50] }); // Add some padding
-        } else if (center) {
-            map.flyTo(center, map.getZoom());
-        }
-    }, [center, polylinePositions, map]); // Add polylinePositions to dependency array
-    return null;
-}
-
-// NEW: Function to fetch fault codes for the selected vehicle
-async function fetchFaultCodes(sessionInfo, deviceId) {
-    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
-    
-    try {
-        // Get fault data from entire history - we'll fetch all historical faults
-        const response = await axios.post(apiUrl, {
-            jsonrpc: '2.0',
-            method: 'Get',
-            params: {
-                typeName: 'FaultData',
-                search: {
-                    deviceSearch: { id: deviceId },
-                    // Get both active and inactive faults from all time
-                    // Remove date filters to get entire history
-                },
-                credentials: {
-                    database: sessionInfo.database,
-                    userName: sessionInfo.userName,
-                    sessionId: sessionInfo.sessionId,
-                },
-            },
-            id: Math.floor(Math.random() * 10000),
-        }, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        const result = response.data.result;
-        if (result) {
-            // Sort fault codes by date, most recent first
-            const sortedFaults = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
-            return sortedFaults;
-        } else if (response.data.error) {
-            console.error('Geotab API Error fetching fault codes:', response.data.error);
-            throw new Error(response.data.error.message || 'Failed to fetch fault codes.');
-        }
-        return [];
-    } catch (err) {
-        console.error('Error fetching fault codes:', err);
-        throw err;
-    }
-}
-
-/**
- * Calculates the distance between two points on the Earth (Haversine formula).
- * Used for point-in-circle test.
- * @param {object} latlon1 - {latitude, longitude}
- * @param {object} latlon2 - {latitude, longitude}
- * @returns {number} Distance in meters
- */
-function calculateDistance(latlon1, latlon2) {
-    const R = 6371e3; // metres
-    const φ1 = latlon1.latitude * Math.PI / 180; // φ, λ in radians
-    const φ2 = latlon2.latitude * Math.PI / 180;
-    const Δφ = (latlon2.latitude - latlon1.latitude) * Math.PI / 180;
-    const Δλ = (latlon2.longitude - latlon1.longitude) * Math.PI / 180;
-
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    const d = R * c; // in metres
-    return d;
-}
-
-/**
- * Checks if a point is inside a polygon using the ray-casting algorithm.
- * @param {object} point - {latitude, longitude}
- * @param {object} latlon2 - {latitude, longitude}
- * @returns {boolean} True if point is inside, false otherwise
- */
-function isPointInPolygon(point, polygon) {
-    let x = point.longitude, y = point.latitude;
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        let xi = polygon[i][1], yi = polygon[i][0];
-        let xj = polygon[j][1], yj = polygon[j][0];
-
-        let intersect = ((yi > y) !== (yj > y)) &&
-            (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
-    }
-    return inside;
-}
-
-async function fetchOdometer(sessionInfo, deviceId) {
-    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
-    const diagnostics = [
-        "DiagnosticOdometerId",
-        "DiagnosticOBDOdometerReaderId",
-        "DiagnosticJ1939TotalVehicleDistanceId",
-        "DiagnosticJ1708TotalVehicleDistanceId",
-        "DiagnosticOdometerAdjustmentId"
-    ];
-    // Fetch odometer data from the last 24 hours to find the latest
-    const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const toDate = new Date().toISOString();
-
-    let latestOdometer = null;
-
-    for (const diagId of diagnostics) {
-        try {
-            const response = await axios.post(apiUrl, {
-                jsonrpc: '2.0',
-                method: 'Get',
-                params: {
-                    typeName: 'StatusData',
-                    search: {
-                        deviceSearch: { id: deviceId },
-                        diagnosticSearch: { id: diagId },
-                        fromDate,
-                        toDate
-                    },
-                    credentials: {
-                        database: sessionInfo.database,
-                        userName: sessionInfo.userName,
-                        sessionId: sessionInfo.sessionId,
-                    },
-                },
-                id: Math.floor(Math.random() * 10000),
-            }, {
-                headers: { 'Content-Type': 'application/json' }
-            });
-
-            const result = response.data.result;
-            if (result && result.length > 0) {
-                // Sort by dateTime descending to get the latest
-                const sorted = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
-                if (sorted[0].data !== undefined && sorted[0].data !== null) {
-                    latestOdometer = sorted[0].data;
-                    break; // Found an odometer, no need to check other diagnostics
-                }
-            }
-        } catch (err) {
-            // Ignore errors for missing diagnostics, try the next one
-            console.warn(`Could not fetch odometer for ${diagId}:`, err.message);
-        }
-    }
-    return latestOdometer;
-}
-
-// NEW: Function to fetch fuel consumption data
-async function fetchFuelConsumption(sessionInfo, deviceId) {
-    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
-    
-    // Define possible fuel diagnostic IDs to try
-    const fuelDiagnostics = [
-        "DiagnosticDeviceTotalFuelId",
-        "DiagnosticFuelUsedId",
-        "DiagnosticFuelLevelId",
-        "DiagnosticOBDFuelLevelInputId",
-        "DiagnosticJ1939FuelLevelId",
-        "DiagnosticJ1708FuelLevelId"
-    ];
-
-    // Get data from the last 24 hours for current fuel status
-    const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const toDate = new Date().toISOString();
-
-    let fuelData = {
-        totalFuel: null,
-        fuelLevel: null,
-        fuelEfficiency: null,
-        lastUpdated: null
-    };
-
-    for (const diagId of fuelDiagnostics) {
-        try {
-            const response = await axios.post(apiUrl, {
-                jsonrpc: '2.0',
-                method: 'Get',
-                params: {
-                    typeName: 'StatusData',
-                    search: {
-                        deviceSearch: { id: deviceId },
-                        diagnosticSearch: { id: diagId },
-                        fromDate,
-                        toDate
-                    },
-                    credentials: {
-                        database: sessionInfo.database,
-                        userName: sessionInfo.userName,
-                        sessionId: sessionInfo.sessionId,
-                    },
-                },
-                id: Math.floor(Math.random() * 10000),
-            }, {
-                headers: { 'Content-Type': 'application/json' }
-            });
-
-            const result = response.data.result;
-            if (result && result.length > 0) {
-                // Sort by dateTime descending to get the latest
-                const sorted = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
-                const latestReading = sorted[0];
-                
-                if (latestReading.data !== undefined && latestReading.data !== null) {
-                    // Determine what type of fuel data this is based on diagnostic ID
-                    if (diagId.includes('TotalFuel') || diagId.includes('FuelUsed')) {
-                        fuelData.totalFuel = latestReading.data;
-                        fuelData.lastUpdated = latestReading.dateTime;
-                    } else if (diagId.includes('FuelLevel')) {
-                        fuelData.fuelLevel = latestReading.data;
-                        fuelData.lastUpdated = latestReading.dateTime;
-                    }
-                    
-                }
-            }
-        } catch (err) {
-            console.warn(`Could not fetch fuel data for ${diagId}:`, err.message);
-        }
-    }
-
-    return fuelData;
-}
-
-// NEW: Function to calculate fuel efficiency for a time period
-async function calculateFuelEfficiency(sessionInfo, deviceId, hours = 24) {
-    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
-    const fromDate = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const toDate = new Date().toISOString();
-
-    try {
-        // Use multiCall to get both odometer and fuel data simultaneously
-        const response = await axios.post(apiUrl, {
-            jsonrpc: '2.0',
-            method: 'MultiCall',
-            params: {
-                calls: [
-                    // Get odometer data
-                    {
-                        method: 'Get',
-                        params: {
-                            typeName: 'StatusData',
-                            search: {
-                                fromDate,
-                                toDate,
-                                diagnosticSearch: { id: 'DiagnosticOdometerAdjustmentId' },
-                                deviceSearch: { id: deviceId }
-                            }
-                        }
-                    },
-                    // Get total fuel data
-                    {
-                        method: 'Get',
-                        params: {
-                            typeName: 'StatusData',
-                            search: {
-                                fromDate,
-                                toDate,
-                                diagnosticSearch: { id: 'DiagnosticDeviceTotalFuelId' },
-                                deviceSearch: { id: deviceId }
-                            }
-                        }
-                    }
-                ],
-                credentials: {
-                    database: sessionInfo.database,
-                    userName: sessionInfo.userName,
-                    sessionId: sessionInfo.sessionId,
-                }
-            },
-            id: Math.floor(Math.random() * 10000),
-        }, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        const results = response.data.result;
-        
-        if (results && results.length >= 2) {
-            const odometerData = results[0];
-            const fuelUsedData = results[1];
-
-            if (odometerData.length === 0 || fuelUsedData.length === 0) {
-                console.log("Insufficient data for fuel efficiency calculation");
-                return null;
-            }
-
-            // Sort data by dateTime
-            const sortedOdometer = odometerData.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
-            const sortedFuel = fuelUsedData.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
-
-            // Calculate distance traveled and fuel consumed
-            const distance = sortedOdometer[sortedOdometer.length - 1].data - sortedOdometer[0].data;
-            const fuelUsed = sortedFuel[sortedFuel.length - 1].data - sortedFuel[0].data;
-
-            if (distance === 0) {
-                console.log("Device has not traveled in this time period");
-                return null;
-            }
-
-            // Calculate efficiency in L/100KM
-            const efficiency = (fuelUsed / (distance / 1000)) * 100;
-            
-            return {
-                efficiency: efficiency,
-                distance: distance / 1000, // Convert to km
-                fuelUsed: fuelUsed,
-                period: hours
-            };
-        }
-    } catch (err) {
-        console.warn("Could not calculate fuel efficiency:", err.message);
-    }
-    
-    return null;
-}
 
 function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip }) {
-
     const [vehicleLocation, setVehicleLocation] = useState(null);
     const [isLoadingLocation, setIsLoadingLocation] = useState(false);
     const [locationError, setLocationError] = useState(null);
@@ -356,8 +27,7 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     const [zonesError, setZonesError] = useState(null);
 
     const [currentGeofenceStatus, setCurrentGeofenceStatus] = useState("Determining status...");
-    
-    // NEW: State for fuel data
+
     const [fuelData, setFuelData] = useState({
         totalFuel: null,
         fuelLevel: null,
@@ -366,12 +36,11 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     });
     const [isLoadingFuel, setIsLoadingFuel] = useState(false);
 
-    // NEW: State for fault codes
-    const [faultCodes, setFaultCodes] = useState([]);
+    const [groupedFaultCodes, setGroupedFaultCodes] = useState([]);
     const [isLoadingFaults, setIsLoadingFaults] = useState(false);
     const [faultsError, setFaultsError] = useState(null);
+    const [selectedFaultGroup, setSelectedFaultGroup] = useState(null);
 
-    // Function to fetch zones (runs once when sessionInfo is available)
     const fetchZones = async () => {
         if (!sessionInfo || !sessionInfo.sessionId) {
             setZonesError('Session information is missing.');
@@ -385,30 +54,31 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         const apiUrl = `https://${sessionInfo.server}/apiv1/`;
 
         try {
-            const response = await axios.post(apiUrl, {
-                jsonrpc: '2.0',
-                method: 'Get',
-                params: {
-                    typeName: 'Zone',
-                    credentials: {
-                        database: sessionInfo.database,
-                        userName: sessionInfo.userName,
-                        sessionId: sessionInfo.sessionId,
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'Get',
+                    params: {
+                        typeName: 'Zone',
+                        credentials: {
+                            database: sessionInfo.database,
+                            userName: sessionInfo.userName,
+                            sessionId: sessionInfo.sessionId,
+                        },
                     },
-                },
-                id: 4,
-            }, {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
+                    id: 4,
+                }),
             });
-            const result = response.data.result;
+            const data = await response.json();
+            const result = data.result;
 
             if (result) {
                 setZones(result);
-            } else if (response.data.error) {
-                setZonesError(response.data.error.message || 'Failed to fetch zones.');
-                console.error('Geotab API Error fetching zones:', response.data.error);
+            } else if (data.error) {
+                setZonesError(data.error.message || 'Failed to fetch zones.');
+                console.error('Geotab API Error fetching zones:', data.error);
             } else {
                 setZonesError('No zones found.');
                 setZones([]);
@@ -427,12 +97,11 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     }, [sessionInfo]);
 
-    // Function to fetch the latest vehicle location manually
     const fetchVehicleLocation = async () => {
         if (!sessionInfo || !selectedVehicleId) {
             setVehicleLocation(null);
             setIsLoadingLocation(false);
-            setLocationError(null); // Clear any previous errors
+            setLocationError(null);
             setCurrentGeofenceStatus("Not authenticated or no vehicle selected.");
             return;
         }
@@ -443,27 +112,30 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         const apiUrl = `https://${sessionInfo.server}/apiv1/`;
 
         try {
-            const response = await axios.post(apiUrl, {
-                jsonrpc: '2.0',
-                method: 'Get',
-                params: {
-                    typeName: 'DeviceStatusInfo',
-                    search: {
-                        deviceSearch: { id: selectedVehicleId }
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'Get',
+                    params: {
+                        typeName: 'DeviceStatusInfo',
+                        search: {
+                            deviceSearch: { id: selectedVehicleId }
+                        },
+                        resultsLimit: 1,
+                        credentials: {
+                            database: sessionInfo.database,
+                            userName: sessionInfo.userName,
+                            sessionId: sessionInfo.sessionId,
+                        },
                     },
-                    resultsLimit: 1, // Only interested in the latest one
-                    credentials: {
-                        database: sessionInfo.database,
-                        userName: sessionInfo.userName,
-                        sessionId: sessionInfo.sessionId,
-                    },
-                },
-                id: 3,
-            }, {
-                headers: { 'Content-Type': 'application/json' }
+                    id: 3,
+                }),
             });
 
-            const result = response.data.result;
+            const data = await response.json();
+            const result = data.result;
             if (result && result.length > 0) {
                 const latestStatus = result[0];
                 let odometer = latestStatus.odometer;
@@ -480,7 +152,7 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                     odometer
                 });
             } else {
-                setVehicleLocation(null); // No data found
+                setVehicleLocation(null);
                 console.log('No DeviceStatusInfo found for this vehicle.');
             }
         } catch (err) {
@@ -491,26 +163,22 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
-    // NEW: Function to fetch fuel data
     const fetchFuelData = async () => {
         if (!sessionInfo || !selectedVehicleId) {
             return;
         }
 
         setIsLoadingFuel(true);
-        
+
         try {
-            // Fetch current fuel consumption data
             const currentFuel = await fetchFuelConsumption(sessionInfo, selectedVehicleId);
-            
-            // Try to calculate fuel efficiency
             const efficiency = await calculateFuelEfficiency(sessionInfo, selectedVehicleId, 24);
-            
+
             setFuelData({
                 ...currentFuel,
                 fuelEfficiency: efficiency
             });
-            
+
         } catch (err) {
             console.error('Error fetching fuel data:', err);
         } finally {
@@ -518,7 +186,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
-    // NEW: Function to fetch fault codes
     const fetchFaultData = async () => {
         if (!sessionInfo || !selectedVehicleId) {
             return;
@@ -526,10 +193,10 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
 
         setIsLoadingFaults(true);
         setFaultsError(null);
-        
+
         try {
-            const faults = await fetchFaultCodes(sessionInfo, selectedVehicleId);
-            setFaultCodes(faults);
+            const groupedFaults = await fetchFaultCodes(sessionInfo, selectedVehicleId);
+            setGroupedFaultCodes(groupedFaults);
         } catch (err) {
             console.error('Error fetching fault codes:', err);
             setFaultsError(err.message || 'Failed to fetch fault codes');
@@ -538,14 +205,12 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
-    // Fetch initial location when selectedVehicleId or sessionInfo changes
     useEffect(() => {
         fetchVehicleLocation();
-        fetchFuelData(); // NEW: Also fetch fuel data
-        fetchFaultData(); // NEW: Also fetch fault data
+        fetchFuelData();
+        fetchFaultData();
     }, [selectedVehicleId, sessionInfo]);
 
-    // Effect to determine Geofence Status whenever vehicleLocation or zones change
     useEffect(() => {
         if (!vehicleLocation) {
             setCurrentGeofenceStatus("No location data available.");
@@ -582,15 +247,11 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     }, [vehicleLocation, zones]);
 
-    const defaultMapCenter = [45.4215, -75.6972]; // Ottawa, Canada
+    const defaultMapCenter = [45.4215, -75.6972];
     const currentPosition = vehicleLocation ? [vehicleLocation.latitude, vehicleLocation.longitude] : defaultMapCenter;
 
-    // Helper to get polyline from trip data
     const getTripPolyline = (trip) => {
-        // We expect trip.path to already be in the format [[lat, lng], [lat, lng], ...]
-        // from PastTripsCard.jsx. Let's directly use it if it's valid.
         if (trip && Array.isArray(trip.path) && trip.path.length > 0) {
-            // Further filter to ensure each sub-array truly contains two numbers
             const validPath = trip.path.filter(p =>
                 Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number'
             );
@@ -601,28 +262,26 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
 
     const tripPolylinePositions = getTripPolyline(selectedTrip);
 
-    // NEW: Function to format fuel display
     const formatFuelDisplay = () => {
         if (isLoadingFuel) return 'Loading...';
-        
+
         const parts = [];
-        
+
         if (fuelData.totalFuel !== null) {
             parts.push(`Total: ${fuelData.totalFuel.toFixed(1)}L`);
         }
-        
+
         if (fuelData.fuelLevel !== null) {
-            // Check if fuel level is a percentage (0-100) or absolute value
-            const levelValue = fuelData.fuelLevel <= 100 ? 
-                `${fuelData.fuelLevel.toFixed(1)}%` : 
+            const levelValue = fuelData.fuelLevel <= 100 ?
+                `${fuelData.fuelLevel.toFixed(1)}%` :
                 `${fuelData.fuelLevel.toFixed(1)}L`;
             parts.push(`Level: ${levelValue}`);
         }
-        
+
         if (fuelData.fuelEfficiency && fuelData.fuelEfficiency.efficiency) {
             parts.push(`Efficiency: ${fuelData.fuelEfficiency.efficiency.toFixed(2)}L/100km`);
         }
-        
+
         return parts.length > 0 ? parts.join(' | ') : 'N/A';
     };
 
@@ -643,7 +302,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 attribution='&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
                             />
 
-                            {/* Render Zones */}
                             {zones.map(zone => {
                                 const zoneColor = zone.color || '#646cff';
                                 const fillOpacity = 0.2;
@@ -688,7 +346,6 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 </Marker>
                             )}
 
-                            {/* Render selected trip polyline if available */}
                             {tripPolylinePositions.length > 0 && (
                                 <>
                                     <Polyline
@@ -698,86 +355,107 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 </>
                             )}
 
-                            {/* Pass tripPolylinePositions to MapUpdater */}
                             <MapUpdater center={currentPosition} polylinePositions={tripPolylinePositions} />
                         </MapContainer>
                     </div>
                     {vehicleLocation && (
                         <div style={styles.infoActionWrapper}>
                             <div style={styles.dataCardsContainer}>
-                                    {/* Vehicle Info Card */}
-                                    <div style={styles.infoBox}>
-                                        {/* NEW: Title for Vehicle Info Card */}
-                                        <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>
-                                            Vehicle Information
-                                        </p>
-                                        <p><strong>Last Updated:</strong> {new Date(vehicleLocation.dateTime).toLocaleString()}</p>
-                                        <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
-                                        <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
-                                        <p><strong>Fuel:</strong> {formatFuelDisplay()}</p>
-                                        <p>
-                                            <strong>Odometer:</strong> {
-                                                vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
-                                                ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
-                                                : 'N/A'
-                                            }
-                                        </p>
-                                        <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
-                                        {/* NEW: Show detailed fuel efficiency if available */}
-                                        {fuelData.fuelEfficiency && (
-                                            <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
-                                                <p><strong>24h Fuel Stats:</strong></p>
-                                                <p>Distance: {fuelData.fuelEfficiency.distance.toFixed(1)} km</p>
-                                                <p>Fuel Used: {fuelData.fuelEfficiency.fuelUsed.toFixed(2)} L</p>
-                                                <p>Efficiency: {fuelData.fuelEfficiency.efficiency.toFixed(2)} L/100km</p>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* NEW: Fault Codes Card */}
-                                    <div style={styles.faultCodesBox}>
-                                        <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' , textAlign: 'center'}}>
-                                            Fault Codes
-                                        </p>
-                                        {isLoadingFaults && <p style={{ fontSize: '0.8em', color: '#666' }}>Loading fault codes...</p>}
-                                        {faultsError && <p style={{ fontSize: '0.8em', color: 'red' }}>Error: {faultsError}</p>}
-                                        {!isLoadingFaults && !faultsError && (
-                                            <div style={styles.faultCodesContent}>
-                                                {faultCodes.length === 0 ? (
-                                                    <p style={{ fontSize: '0.8em', color: '#666', fontStyle: 'italic' }}>No fault codes found</p>
-                                                ) : (
-                                                    <div style={styles.faultCodesList}>
-                                                        {faultCodes.slice(0, 5).map((fault, index) => (
-                                                            <div key={index} style={styles.faultCodeItem}>
-                                                                <div style={{ fontSize: '0.75em', color: '#888' }}>
-                                                                    {new Date(fault.dateTime).toLocaleDateString()}
-                                                                </div>
-                                                                <div style={{ fontSize: '0.8em', fontWeight: 'bold' }}>
-                                                                    {fault.diagnostic?.name || fault.diagnostic?.id || 'Unknown'}
-                                                                </div>
-                                                                <div style={{ fontSize: '0.75em', color: fault.faultState === 'Active' ? 'red' : 'orange' }}>
-                                                                    {fault.faultState || 'Unknown State'}
-                                                                </div>
-                                                            </div>
-                                                        ))}
-                                                        {faultCodes.length > 5 && (
-                                                            <div style={{ fontSize: '0.75em', color: '#666', textAlign: 'center', marginTop: '5px' }}>
-                                                                ...and {faultCodes.length - 5} more
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
+                                {/* Vehicle Info Card */}
+                                <div style={styles.infoBox}>
+                                    <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>
+                                        Vehicle Information
+                                    </p>
+                                    <p><strong>Last Updated:</strong> {new Date(vehicleLocation.dateTime).toLocaleString()}</p>
+                                    <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
+                                    <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
+                                    <p><strong>Fuel:</strong> {formatFuelDisplay()}</p>
+                                    <p>
+                                        <strong>Odometer:</strong> {
+                                            vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
+                                            ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
+                                            : 'N/A'
+                                        }
+                                    </p>
+                                    <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
+                                    {fuelData.fuelEfficiency && (
+                                        <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
+                                            <p><strong>24h Fuel Stats:</strong></p>
+                                            <p>Distance: {fuelData.fuelEfficiency.distance.toFixed(1)} km</p>
+                                            <p>Fuel Used: {fuelData.fuelEfficiency.fuelUsed.toFixed(2)} L</p>
+                                            <p>Efficiency: {fuelData.fuelEfficiency.efficiency.toFixed(2)} L/100km</p>
+                                        </div>
+                                    )}
                                 </div>
 
-                            <button 
+                                {/* ENHANCED: Fault Codes Card with click functionality and grouping */}
+                                <div style={styles.faultCodesBox}>
+                                    <p style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px', textAlign: 'center' }}>
+                                        Fault Codes
+                                    </p>
+                                    {isLoadingFaults && <p style={{ fontSize: '0.8em', color: '#666' }}>Loading fault codes...</p>}
+                                    {faultsError && <p style={{ fontSize: '0.8em', color: 'red' }}>Error: {faultsError}</p>}
+                                    {!isLoadingFaults && !faultsError && (
+                                        <div style={styles.faultCodesContent}>
+                                            {groupedFaultCodes.length === 0 ? (
+                                                <p style={{ fontSize: '0.8em', color: '#666', fontStyle: 'italic' }}>No fault codes found</p>
+                                            ) : (
+                                                <div style={styles.faultCodesList}>
+                                                    {groupedFaultCodes.slice(0, 8).map((faultGroup, index) => (
+                                                        <div
+                                                            key={index}
+                                                            className="fault-group-item" // Add class for hover effect
+                                                            style={styles.faultGroupItem}
+                                                            onClick={() => setSelectedFaultGroup(faultGroup)}
+                                                        >
+                                                            <div style={styles.faultGroupHeader}>
+                                                                <div style={{ fontSize: '0.8em', fontWeight: 'bold', color: '#333' }}>
+                                                                    {faultGroup.diagnosticName}
+                                                                </div>
+                                                                <div style={styles.faultBadges}>
+                                                                    {faultGroup.activeFaults > 0 && (
+                                                                        <span style={styles.activeBadge}>
+                                                                            {faultGroup.activeFaults} Active
+                                                                        </span>
+                                                                    )}
+                                                                    {faultGroup.inactiveFaults > 0 && (
+                                                                        <span style={styles.inactiveBadge}>
+                                                                            {faultGroup.inactiveFaults} Inactive
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            <div style={styles.faultGroupDetails}>
+                                                                <div style={{ fontSize: '0.7em', color: '#666' }}>
+                                                                    Total: {faultGroup.count} occurrence{faultGroup.count !== 1 ? 's' : ''}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.7em', color: '#666' }}>
+                                                                    Latest: {new Date(faultGroup.mostRecentDate).toLocaleDateString()}
+                                                                </div>
+                                                            </div>
+                                                            <div style={styles.clickHint}>
+                                                                Click for details →
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {groupedFaultCodes.length > 8 && (
+                                                        <div style={{ fontSize: '0.75em', color: '#666', textAlign: 'center', marginTop: '5px' }}>
+                                                            ...and {groupedFaultCodes.length - 8} more fault groups
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <button
                                 onClick={() => {
                                     fetchVehicleLocation();
-                                    fetchFuelData(); // NEW: Also refresh fuel data
-                                    fetchFaultData(); // NEW: Also refresh fault data
-                                }} 
+                                    fetchFuelData();
+                                    fetchFaultData();
+                                }}
                                 style={commonStyles.button}
                                 disabled={isLoadingLocation || isLoadingFuel || isLoadingFaults}
                             >
@@ -788,81 +466,16 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                     {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location, Fuel & Faults' to fetch it.</p>}
                 </>
             )}
+
+            {/* ENHANCED: Fault Detail Modal */}
+            {selectedFaultGroup && (
+                <FaultDetailModal
+                    faultGroup={selectedFaultGroup}
+                    onClose={() => setSelectedFaultGroup(null)}
+                />
+            )}
         </div>
     );
 }
-
-const styles = {
-    mapContainer: {
-        width: '100%',
-        height: '400px',
-        marginBottom: '15px',
-        borderRadius: '8px',
-        overflow: 'hidden',
-    },
-    map: {
-        width: '100%',
-        height: '100%',
-    },
-    infoActionWrapper: {
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        width: '100%',
-    },
-    dataCardsContainer: {
-        display: 'flex',
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'flex-start',
-        gap: '15px',
-        width: '100%',
-        marginBottom: '0.5em',
-        flexWrap: 'wrap',
-    },
-    infoBox: {
-        backgroundColor: '#f0f0f0',
-        padding: '10px',
-        borderRadius: '5px',
-        fontSize: '0.9em',
-        width: 'auto',
-        minWidth: '120px',
-        maxWidth: '350px',
-        textAlign: 'center',
-        display: 'inline-block',
-        flex: '1',
-        minWidth: '250px',
-    },
-    faultCodesBox: {
-        backgroundColor: '#f8f9fa',
-        padding: '10px',
-        borderRadius: '5px',
-        fontSize: '0.9em',
-        width: 'auto',
-        minWidth: '200px',
-        maxWidth: '350px',
-        textAlign: 'left',
-        display: 'inline-block',
-        flex: '1',
-        minWidth: '250px',
-        border: '1px solid #e9ecef',
-    },
-    faultCodesContent: {
-        maxHeight: '200px',
-        overflowY: 'auto',
-    },
-    faultCodesList: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-    },
-    faultCodeItem: {
-        padding: '6px',
-        backgroundColor: '#fff',
-        borderRadius: '3px',
-        border: '1px solid #e9ecef',
-        fontSize: '0.8em',
-    },
-};
 
 export default VehicleMap;
