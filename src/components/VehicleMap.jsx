@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+// VehicleMap.jsx
+import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polygon, Circle, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -20,17 +21,20 @@ const customIcon = L.icon({
     popupAnchor: [0, -50],
 });
 
-function MapUpdater({ center }) {
+// MODIFIED MapUpdater to fit bounds
+function MapUpdater({ center, polylinePositions }) {
     const map = useMap();
     useEffect(() => {
-        if (center) {
+        if (polylinePositions && polylinePositions.length > 0) {
+            // Create a LatLngBounds object from the polyline positions
+            const bounds = L.latLngBounds(polylinePositions);
+            map.fitBounds(bounds, { padding: [50, 50] }); // Add some padding
+        } else if (center) {
             map.flyTo(center, map.getZoom());
         }
-    }, [center, map]);
+    }, [center, polylinePositions, map]); // Add polylinePositions to dependency array
     return null;
 }
-
-// === NEW HELPER FUNCTIONS FOR GEOSPACE CALCULATIONS ===
 
 /**
  * Calculates the distance between two points on the Earth (Haversine formula).
@@ -62,12 +66,11 @@ function calculateDistance(latlon1, latlon2) {
  * @returns {boolean} True if point is inside, false otherwise
  */
 function isPointInPolygon(point, polygon) {
-    // polygon is an array of [lat, lon] pairs
     let x = point.longitude, y = point.latitude;
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        let xi = polygon[i][1], yi = polygon[i][0]; // polygon coords are [lat, lon]
-        let xj = polygon[j][1], yj = polygon[j][0]; // point coords are {latitude, longitude}
+        let xi = polygon[i][1], yi = polygon[i][0];
+        let xj = polygon[j][1], yj = polygon[j][0];
 
         let intersect = ((yi > y) !== (yj > y)) &&
             (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
@@ -76,7 +79,6 @@ function isPointInPolygon(point, polygon) {
     return inside;
 }
 
-// Helper to fetch odometer from multiple diagnostics
 async function fetchOdometer(sessionInfo, deviceId) {
     const apiUrl = `https://${sessionInfo.server}/apiv1/`;
     const diagnostics = [
@@ -86,7 +88,8 @@ async function fetchOdometer(sessionInfo, deviceId) {
         "DiagnosticJ1708TotalVehicleDistanceId",
         "DiagnosticOdometerAdjustmentId"
     ];
-    const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
+    // Fetch odometer data from the last 24 hours to find the latest
+    const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const toDate = new Date().toISOString();
 
     let latestOdometer = null;
@@ -117,21 +120,24 @@ async function fetchOdometer(sessionInfo, deviceId) {
 
             const result = response.data.result;
             if (result && result.length > 0) {
-                // Use the latest value
+                // Sort by dateTime descending to get the latest
                 const sorted = result.sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime));
                 if (sorted[0].data !== undefined && sorted[0].data !== null) {
                     latestOdometer = sorted[0].data;
-                    break; // Stop at first found
+                    break; // Found an odometer, no need to check other diagnostics
                 }
             }
         } catch (err) {
-            // Ignore errors for missing diagnostics
+            // Ignore errors for missing diagnostics, try the next one
+            console.warn(`Could not fetch odometer for ${diagId}:`, err.message);
         }
     }
     return latestOdometer;
 }
 
-function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip, onTripSelect }) {
+function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip }) {
+    console.log('VehicleMap: selectedTrip prop:', selectedTrip);
+
     const [vehicleLocation, setVehicleLocation] = useState(null);
     const [isLoadingLocation, setIsLoadingLocation] = useState(false);
     const [locationError, setLocationError] = useState(null);
@@ -140,121 +146,9 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     const [isLoadingZones, setIsLoadingZones] = useState(true);
     const [zonesError, setZonesError] = useState(null);
 
-    // <<< NEW: State to hold the current geofence status
     const [currentGeofenceStatus, setCurrentGeofenceStatus] = useState("Determining status...");
 
-    // Function to fetch vehicle location
-    const fetchVehicleLocation = async () => {
-        if (!sessionInfo || !sessionInfo.sessionId || !selectedVehicleId) {
-            setVehicleLocation(null);
-            setIsLoadingLocation(false);
-            setCurrentGeofenceStatus("Not authenticated or no vehicle selected.");
-            return;
-        }
-
-        setIsLoadingLocation(true);
-        setLocationError(null);
-
-        const apiUrl = `https://${sessionInfo.server}/apiv1/`;
-
-        try {
-            const response = await axios.post(apiUrl, {
-                jsonrpc: '2.0',
-                method: 'Get',
-                params: {
-                    typeName: 'DeviceStatusInfo',
-                    search: {
-                        deviceSearch: {
-                            id: selectedVehicleId
-                        }
-                    },
-                    credentials: {
-                        database: sessionInfo.database,
-                        userName: sessionInfo.userName,
-                        sessionId: sessionInfo.sessionId,
-                    },
-                },
-                id: 3,
-            }, {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            const result = response.data.result;
-
-            if (result && Array.isArray(result) && result.length > 0) {
-                const latestStatus = result[0];
-
-                // Fetch odometer from diagnostics
-                let odometer = latestStatus.odometer;
-                if (!odometer && sessionInfo && selectedVehicleId) {
-                    odometer = await fetchOdometer(sessionInfo, selectedVehicleId);
-                }
-
-                const newLocation = {
-                    latitude: latestStatus.latitude,
-                    longitude: latestStatus.longitude,
-                    speed: latestStatus.speed,
-                    dateTime: latestStatus.dateTime,
-                    ignition: latestStatus.ignition,
-                    bearing: latestStatus.bearing,
-                    odometer // <-- use fetched odometer
-                };
-                setVehicleLocation(newLocation);
-                console.log('Vehicle location fetched:', latestStatus);
-
-                // <<< NEW: Determine Geofence Status after fetching location
-                let inZone = false;
-                if (zones.length > 0) { // Only check if zones have been loaded
-                    for (const zone of zones) {
-                        const vehiclePoint = { latitude: newLocation.latitude, longitude: newLocation.longitude };
-
-                        if (zone.geometryType === 'Polygon' && zone.points && zone.points.length > 0) {
-                            const polygonPositionsForCheck = zone.points.map(point => [point.y, point.x]); // [lat, lon]
-                            if (isPointInPolygon(vehiclePoint, polygonPositionsForCheck)) {
-                                setCurrentGeofenceStatus(`Inside: ${zone.name}`);
-                                inZone = true;
-                                break; // Found a zone, no need to check others
-                            }
-                        } else if (zone.geometryType === 'Circle' && zone.center && zone.radius) {
-                            const centerPoint = { latitude: zone.center.latitude, longitude: zone.center.longitude };
-                            const distance = calculateDistance(vehiclePoint, centerPoint);
-                            if (distance <= zone.radius) {
-                                setCurrentGeofenceStatus(`Inside: ${zone.name}`);
-                                inZone = true;
-                                break; // Found a zone
-                            }
-                        }
-                    }
-                    if (!inZone) {
-                        setCurrentGeofenceStatus("Outside all geofences");
-                    }
-                } else {
-                    setCurrentGeofenceStatus("No geofences loaded or configured.");
-                }
-
-
-            } else if (response.data.error) {
-                setLocationError(response.data.error.message || 'Failed to fetch vehicle location.');
-                console.error('Geotab API Error fetching location:', response.data.error);
-                setCurrentGeofenceStatus("Failed to get vehicle location.");
-            } else {
-                setLocationError('No location data found for this vehicle.');
-                setVehicleLocation(null);
-                setCurrentGeofenceStatus("No location data found.");
-            }
-
-        } catch (err) {
-            console.error('Network or Request Error fetching location:', err);
-            setLocationError('Could not fetch vehicle location. Please try again.');
-            setCurrentGeofenceStatus("Error fetching location data.");
-        } finally {
-            setIsLoadingLocation(false);
-        }
-    };
-
-    // Function to fetch zones
+    // Function to fetch zones (runs once when sessionInfo is available)
     const fetchZones = async () => {
         if (!sessionInfo || !sessionInfo.sessionId) {
             setZonesError('Session information is missing.');
@@ -305,50 +199,138 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
         }
     };
 
-    // Effect for fetching zones (runs once when sessionInfo is available)
     useEffect(() => {
         if (sessionInfo) {
             fetchZones();
         }
     }, [sessionInfo]);
 
-    // Effect for fetching vehicle location (manual refresh only)
+    // Function to fetch the latest vehicle location manually
+    const fetchVehicleLocation = async () => {
+        if (!sessionInfo || !selectedVehicleId) {
+            setVehicleLocation(null);
+            setIsLoadingLocation(false);
+            setLocationError(null); // Clear any previous errors
+            setCurrentGeofenceStatus("Not authenticated or no vehicle selected.");
+            return;
+        }
+
+        setIsLoadingLocation(true);
+        setLocationError(null);
+
+        const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+
+        try {
+            const response = await axios.post(apiUrl, {
+                jsonrpc: '2.0',
+                method: 'Get',
+                params: {
+                    typeName: 'DeviceStatusInfo',
+                    search: {
+                        deviceSearch: { id: selectedVehicleId }
+                    },
+                    resultsLimit: 1, // Only interested in the latest one
+                    credentials: {
+                        database: sessionInfo.database,
+                        userName: sessionInfo.userName,
+                        sessionId: sessionInfo.sessionId,
+                    },
+                },
+                id: 3,
+            }, {
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const result = response.data.result;
+            if (result && result.length > 0) {
+                const latestStatus = result[0];
+                let odometer = latestStatus.odometer;
+                if (odometer === undefined || odometer === null) {
+                    odometer = await fetchOdometer(sessionInfo, selectedVehicleId);
+                }
+                setVehicleLocation({
+                    latitude: latestStatus.latitude,
+                    longitude: latestStatus.longitude,
+                    speed: latestStatus.speed,
+                    dateTime: latestStatus.dateTime,
+                    ignition: latestStatus.ignition,
+                    bearing: latestStatus.bearing,
+                    odometer
+                });
+                console.log('Vehicle location fetched:', latestStatus);
+            } else {
+                setVehicleLocation(null); // No data found
+                console.log('No DeviceStatusInfo found for this vehicle.');
+            }
+        } catch (err) {
+            console.error('Error fetching vehicle location:', err);
+            setLocationError('Could not fetch vehicle location. Please try again.');
+        } finally {
+            setIsLoadingLocation(false);
+        }
+    };
+
+    // Fetch initial location when selectedVehicleId or sessionInfo changes
     useEffect(() => {
         fetchVehicleLocation();
-        // The currentGeofenceStatus will be updated within fetchVehicleLocation
-    }, [selectedVehicleId, sessionInfo, zones]); // <<< NEW: Add 'zones' to dependency array
-                                            // This ensures geofence status is re-evaluated
-                                            // if zones are loaded/changed after initial location fetch.
+    }, [selectedVehicleId, sessionInfo]);
+
+    // Effect to determine Geofence Status whenever vehicleLocation or zones change
+    useEffect(() => {
+        if (!vehicleLocation) {
+            setCurrentGeofenceStatus("No location data available.");
+            return;
+        }
+
+        let inZone = false;
+        if (zones.length > 0) {
+            for (const zone of zones) {
+                const vehiclePoint = { latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude };
+
+                if (zone.geometryType === 'Polygon' && zone.points && zone.points.length > 0) {
+                    const polygonPositionsForCheck = zone.points.map(point => [point.y, point.x]);
+                    if (isPointInPolygon(vehiclePoint, polygonPositionsForCheck)) {
+                        setCurrentGeofenceStatus(`Inside: ${zone.name}`);
+                        inZone = true;
+                        break;
+                    }
+                } else if (zone.geometryType === 'Circle' && zone.center && zone.radius) {
+                    const centerPoint = { latitude: zone.center.latitude, longitude: zone.center.longitude };
+                    const distance = calculateDistance(vehiclePoint, centerPoint);
+                    if (distance <= zone.radius) {
+                        setCurrentGeofenceStatus(`Inside: ${zone.name}`);
+                        inZone = true;
+                        break;
+                    }
+                }
+            }
+            if (!inZone) {
+                setCurrentGeofenceStatus("Outside all geofences");
+            }
+        } else {
+            setCurrentGeofenceStatus("No geofences loaded or configured.");
+        }
+    }, [vehicleLocation, zones]);
 
 
     const defaultMapCenter = [45.4215, -75.6972]; // Ottawa, Canada
     const currentPosition = vehicleLocation ? [vehicleLocation.latitude, vehicleLocation.longitude] : defaultMapCenter;
 
-    // Helper to get trip polyline positions
+    // Helper to get polyline from trip data
     const getTripPolyline = (trip) => {
-        if (!trip) return [];
-        // Try all possible property names
-        const path = trip.path || trip.route || trip.points;
-        if (!Array.isArray(path)) return [];
-        return path.map(p => {
-            if (p.latitude !== undefined && p.longitude !== undefined) {
-                return [p.latitude, p.longitude];
-            } else if (p.y !== undefined && p.x !== undefined) {
-                return [p.y, p.x];
-            } else if (Array.isArray(p) && p.length === 2) {
-                return p;
-            }
-            return null;
-        }).filter(Boolean);
+        // We expect trip.path to already be in the format [[lat, lng], [lat, lng], ...]
+        // from PastTripsCard.jsx. Let's directly use it if it's valid.
+        if (trip && Array.isArray(trip.path) && trip.path.length > 0) {
+            // Further filter to ensure each sub-array truly contains two numbers
+            const validPath = trip.path.filter(p =>
+                Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number'
+            );
+            return validPath;
+        }
+        return [];
     };
 
-    // Handle trip selection
-    const handleTripSelect = (trip) => {
-        if (trip && onTripSelect) {
-            console.log('Selected trip:', trip);
-            onTripSelect(trip);
-        }
-    };
+    const tripPolylinePositions = getTripPolyline(selectedTrip);
 
     return (
         <div style={commonStyles.form}>
@@ -374,19 +356,17 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 const strokeOpacity = 0.8;
 
                                 if (zone.geometryType === 'Polygon' && zone.points && zone.points.length > 0) {
-                                    const polygonPositions = zone.points.map(point => [point.y, point.x]);
-                                    // console.log(`Rendering Polygon: ${zone.name}`, polygonPositions);
+                                    const polygonPositionsForCheck = zone.points.map(point => [point.y, point.x]);
                                     return (
                                         <Polygon
                                             key={zone.id}
-                                            positions={polygonPositions}
+                                            positions={polygonPositionsForCheck}
                                             pathOptions={{ color: zoneColor, fillColor: zoneColor, fillOpacity, weight: 2, opacity: strokeOpacity }}
                                         >
                                             <Popup>Zone: {zone.name}</Popup>
                                         </Polygon>
                                     );
                                 } else if (zone.geometryType === 'Circle' && zone.center && zone.radius) {
-                                    // console.log(`Rendering Circle: ${zone.name}`, zone.center, zone.radius);
                                     return (
                                         <Circle
                                             key={zone.id}
@@ -414,16 +394,18 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                             )}
 
                             {/* Render selected trip polyline if available */}
-                            {selectedTrip && selectedTrip.path && (
+                            {tripPolylinePositions.length > 0 && (
                                 <>
+                                    {console.log('VehicleMap: Rendering Polyline with positions:', tripPolylinePositions)}
                                     <Polyline
-                                        positions={getTripPolyline(selectedTrip)}
+                                        positions={tripPolylinePositions}
                                         pathOptions={{ color: 'orange', weight: 4, opacity: 0.8 }}
                                     />
                                 </>
                             )}
 
-                            <MapUpdater center={currentPosition} />
+                            {/* Pass tripPolylinePositions to MapUpdater */}
+                            <MapUpdater center={currentPosition} polylinePositions={tripPolylinePositions} />
                         </MapContainer>
                     </div>
                     {vehicleLocation && (
@@ -433,38 +415,26 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
                                 <p><strong>Speed:</strong> {vehicleLocation.speed ? vehicleLocation.speed.toFixed(1) : 'N/A'} km/h</p>
                                 <p><strong>Ignition:</strong> {vehicleLocation.ignition ? 'On' : 'Off'}</p>
                                 <p>
-      <strong>Fuel:</strong> {
-        vehicleLocation.fuelUsed !== undefined ? `${vehicleLocation.fuelUsed} L` :
-        vehicleLocation.fuel !== undefined ? `${vehicleLocation.fuel} L` :
-        vehicleLocation.fuelLevel !== undefined ? `${vehicleLocation.fuelLevel} %` :
-        'N/A'
-      }
-    </p>
-    <p>
-      <strong>Odometer:</strong> {
-        vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
-          ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
-          : 'N/A'
-      }
-    </p>
-                                <p><strong>Coordinates:</strong> {vehicleLocation.latitude.toFixed(4)}, {vehicleLocation.longitude.toFixed(4)}</p>
+                                    <strong>Fuel:</strong> {
+                                        vehicleLocation.fuelUsed !== undefined ? `${vehicleLocation.fuelUsed} L` :
+                                        vehicleLocation.fuel !== undefined ? `${vehicleLocation.fuel} L` :
+                                        vehicleLocation.fuelLevel !== undefined ? `${vehicleLocation.fuelLevel} %` :
+                                        'N/A'
+                                    }
+                                </p>
+                                <p>
+                                    <strong>Odometer:</strong> {
+                                        vehicleLocation.odometer !== undefined && vehicleLocation.odometer !== null
+                                        ? (vehicleLocation.odometer / 1000).toFixed(2) + ' km'
+                                        : 'N/A'
+                                    }
+                                </p>
                                 <p><strong>Geofence Status:</strong> {currentGeofenceStatus}</p>
                             </div>
-                            <button
-                                style={{
-                                    ...commonStyles.button,
-                                    width: '100%',
-                                    marginTop: '1em',
-                                    marginBottom: '0.5em'
-                                }}
-                                onClick={fetchVehicleLocation}
-                                disabled={isLoadingLocation}
-                            >
-                                {isLoadingLocation ? 'Refreshing...' : 'Refresh'}
-                            </button>
+                            <button onClick={fetchVehicleLocation} style={commonStyles.button}>Refresh Location</button>
                         </div>
                     )}
-                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet.</p>}
+                    {!vehicleLocation && <p>No real-time location data available for this vehicle yet. Click 'Refresh Location' to fetch it.</p>}
                 </>
             )}
         </div>
