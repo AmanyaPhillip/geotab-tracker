@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polygon, Circle, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import axios from 'axios';
 
 // Import functions from the new utility file
 import {
@@ -17,7 +18,14 @@ import {
 import { MapUpdater, FaultDetailModal, customIcon, styles } from './MapComponents';
 
 
-function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip }) {
+function VehicleMap({ sessionInfo, onVehicleSelect, selectedVehicleId, commonStyles, selectedTrip }) {
+    // Vehicle selector states
+    const [vehicles, setVehicles] = useState([]);
+    const [isLoadingVehicles, setIsLoadingVehicles] = useState(true);
+    const [vehiclesError, setVehiclesError] = useState(null);
+    const [currentSelectedId, setCurrentSelectedId] = useState('');
+
+    // Original VehicleMap states
     const [vehicleLocation, setVehicleLocation] = useState(null);
     const [isLoadingLocation, setIsLoadingLocation] = useState(false);
     const [locationError, setLocationError] = useState(null);
@@ -40,6 +48,82 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     const [isLoadingFaults, setIsLoadingFaults] = useState(false);
     const [faultsError, setFaultsError] = useState(null);
     const [selectedFaultGroup, setSelectedFaultGroup] = useState(null);
+
+    // Fetch vehicles on component mount
+    useEffect(() => {
+        const fetchVehicles = async () => {
+            setIsLoadingVehicles(true);
+            setVehiclesError(null);
+
+            if (!sessionInfo || !sessionInfo.sessionId) {
+                setVehiclesError('Authentication session not found.');
+                setIsLoadingVehicles(false);
+                return;
+            }
+
+            const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+
+            try {
+                const response = await axios.post(apiUrl, {
+                    jsonrpc: '2.0',
+                    method: 'Get',
+                    params: {
+                        typeName: 'Device',
+                        credentials: {
+                            database: sessionInfo.database,
+                            userName: sessionInfo.userName,
+                            sessionId: sessionInfo.sessionId,
+                        },
+                    },
+                    id: 2, // A unique ID for this request
+                }, {
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = response.data.result;
+
+                if (result) {
+                    setVehicles(result);
+                    // Only pre-select if nothing is selected yet
+                    if (result.length > 0 && !currentSelectedId) {
+                        setCurrentSelectedId(result[0].id);
+                        onVehicleSelect(result[0].id);
+                    }
+                } else if (response.data.error) {
+                    setVehiclesError(response.data.error.message || 'Failed to fetch vehicles.');
+                    console.error('Geotab API Error fetching devices:', response.data.error);
+                } else {
+                    setVehiclesError('Failed to fetch vehicles: Unexpected API response.');
+                    console.error('Unexpected API response fetching devices:', response.data);
+                }
+
+            } catch (err) {
+                console.error('Network or Request Error fetching devices:', err);
+                setVehiclesError('Could not fetch vehicles. Please try again.');
+            } finally {
+                setIsLoadingVehicles(false);
+            }
+        };
+
+        if (sessionInfo) {
+            fetchVehicles();
+        }
+    }, [sessionInfo, onVehicleSelect]);
+
+    // Update currentSelectedId when selectedVehicleId prop changes
+    useEffect(() => {
+        if (selectedVehicleId && selectedVehicleId !== currentSelectedId) {
+            setCurrentSelectedId(selectedVehicleId);
+        }
+    }, [selectedVehicleId]);
+
+    const handleSelectChange = (e) => {
+        const selectedId = e.target.value;
+        setCurrentSelectedId(selectedId);
+        onVehicleSelect(selectedId); // Notify parent component
+    };
 
     const fetchZones = async () => {
         if (!sessionInfo || !sessionInfo.sessionId) {
@@ -206,9 +290,11 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     };
 
     useEffect(() => {
-        fetchVehicleLocation();
-        fetchFuelData();
-        fetchFaultData();
+        if (selectedVehicleId) {
+            fetchVehicleLocation();
+            fetchFuelData();
+            fetchFaultData();
+        }
     }, [selectedVehicleId, sessionInfo]);
 
     useEffect(() => {
@@ -288,6 +374,52 @@ function VehicleMap({ selectedVehicleId, sessionInfo, commonStyles, selectedTrip
     return (
         <div style={commonStyles.form}>
             <h2>Vehicle Location & Geofences</h2>
+            
+            {/* Vehicle Selector - inline with label */}
+            {isLoadingVehicles && <p>Loading vehicles...</p>}
+            {vehiclesError && <p style={commonStyles.error}>Error: {vehiclesError}</p>}
+            
+            {!isLoadingVehicles && !vehiclesError && vehicles.length > 0 && (
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    marginBottom: '15px',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center' // ADDED: This centers the content horizontally
+                }}>
+                    <label htmlFor="vehicle-select" style={{
+                        ...commonStyles.label,
+                        marginBottom: '0',
+                        whiteSpace: 'nowrap'
+                    }}>
+                        Choose a vehicle:
+                    </label>
+                    <select
+                        id="vehicle-select"
+                        value={currentSelectedId}
+                        onChange={handleSelectChange}
+                        style={{
+                            ...commonStyles.input,
+                            width: 'auto',
+                            minWidth: '200px',
+                            textAlign: 'center'
+                        }}
+                    >
+                        {vehicles.map(vehicle => (
+                            <option key={vehicle.id} value={vehicle.id} style={{textAlign:'center'}}>
+                                {vehicle.name || vehicle.id}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
+            
+            {!isLoadingVehicles && !vehiclesError && vehicles.length === 0 && (
+                <p>No vehicles found in this database.</p>
+            )}
+
+            {/* Loading and error states */}
             {isLoadingLocation && <p>Loading vehicle location...</p>}
             {locationError && <p style={commonStyles.error}>Error: {locationError}</p>}
             {isLoadingZones && <p>Loading geofences...</p>}

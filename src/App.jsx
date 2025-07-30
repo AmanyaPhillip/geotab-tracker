@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import AuthForm from './components/AuthForm';
-import VehicleSelector from './components/VehicleSelector';
 import VehicleMap from './components/VehicleMap'; // <<< NEW: Import VehicleMap
 import PastTripsCard from './components/PastTripsCard'; // Add this import
 import axios from 'axios';
@@ -100,41 +99,38 @@ function App() {
                     <h1>Welcome, {sessionInfo.userName}!</h1>
                     <p>Logged into database: {sessionInfo.database}</p>
 
-                    {/* VehicleMap is shown below title/database */}
+                    {/* VehicleMap now includes the vehicle selector */}
+                    <VehicleMap 
+                        sessionInfo={sessionInfo} 
+                        onVehicleSelect={handleVehicleSelected}
+                        selectedVehicleId={selectedVehicleId}
+                        commonStyles={{ 
+                            form: { ...appStyles.form, marginTop: '20px', maxWidth: '700px' },
+                            error: appStyles.error,
+                            inputGroup: appStyles.inputGroup,
+                            label: appStyles.label,
+                            input: appStyles.input,
+                            button: appStyles.button,
+                        }}
+                        selectedTrip={selectedTrip} // Pass selectedTrip to VehicleMap
+                    />
+
+                    {/* PastTripsCard, full width */}
                     {selectedVehicleId && (
-                        <VehicleMap 
-                            selectedVehicleId={selectedVehicleId} 
-                            sessionInfo={sessionInfo} 
-                            commonStyles={{ 
-                                form: { ...appStyles.form, marginTop: '20px', maxWidth: '700px' },
-                                error: appStyles.error,
-                            }}
-                            selectedTrip={selectedTrip} // Pass selectedTrip to VehicleMap
-                        />
+                        <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '1em', alignItems: 'stretch' }}>
+                            <PastTripsCard
+                                selectedVehicleId={selectedVehicleId}
+                                sessionInfo={sessionInfo}
+                                onTripSelect={setSelectedTrip}
+                                commonStyles={{
+                                    ...appStyles,
+                                    form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
+                                }}
+                            />
+                        </div>
                     )}
 
-                    {/* VehicleSelector above PastTripsCard, both full width */}
-                    <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '1em', alignItems: 'stretch' }}>
-                        <VehicleSelector 
-                            sessionInfo={sessionInfo} 
-                            onVehicleSelect={handleVehicleSelected} 
-                            commonStyles={{ 
-                                ...appStyles,
-                                form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
-                            }}
-                        />
-                        <PastTripsCard
-                            selectedVehicleId={selectedVehicleId}
-                            sessionInfo={sessionInfo}
-                            onTripSelect={setSelectedTrip}
-                            commonStyles={{
-                                ...appStyles,
-                                form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
-                            }}
-                        />
-                    </div>
-
-                    {/* Logout button is now below VehicleSelector and PastTripsCard */}
+                    {/* Logout button is now below PastTripsCard */}
                     <button 
                         onClick={() => {
                             setIsAuthenticated(false);
