@@ -84,6 +84,10 @@ function App() {
     };
 
     const handleVehicleSelected = (vehicleId) => {
+        // Reset selected trip when vehicle changes
+        if (vehicleId !== selectedVehicleId) {
+            setSelectedTrip(null);
+        }
         setSelectedVehicleId(vehicleId);
     };
 

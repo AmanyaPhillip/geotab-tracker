@@ -18,6 +18,10 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
             return;
         }
 
+        // Reset trip info and selection when vehicle changes
+        setTripInfo(null);
+        setSelectedTripId('');
+
         const fetchTrips = async () => {
             setIsLoadingTrips(true);
             setTripsError(null);
@@ -201,7 +205,8 @@ function PastTripsCard({ selectedVehicleId, sessionInfo, onTripSelect, commonSty
             {!isLoadingTrips && !tripsError && trips.length === 0 && (
                 <p>No trips found for this vehicle.</p>
             )}
-            {tripInfo && (
+            {/* MODIFIED: Only show trip info when both tripInfo exists AND selectedTripId is not empty */}
+            {tripInfo && selectedTripId !== "" && (
                 <div style={{ marginTop: '1em', background: '#f8f9fa', padding: '1em', borderRadius: '8px' }}>
                     <p><strong>Average Speed:</strong> {tripInfo.averageSpeed ? tripInfo.averageSpeed.toFixed(1) : 'N/A'} km/h</p>
                     <p><strong>Distance Traveled:</strong> {tripInfo.distance ? (tripInfo.distance / 1000).toFixed(2) : 'N/A'} km</p>
