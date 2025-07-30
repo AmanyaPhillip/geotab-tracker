@@ -19,6 +19,75 @@ import { MapUpdater, FaultDetailModal, customIcon, styles } from './MapComponent
 
 
 function VehicleMap({ sessionInfo, onVehicleSelect, selectedVehicleId, commonStyles, selectedTrip }) {
+    // Add this at the beginning of your VehicleMap component function:
+function VehicleMap({ sessionInfo, onVehicleSelect, selectedVehicleId, commonStyles, selectedTrip }) {
+    // Add error boundary protection at component level
+    const [componentError, setComponentError] = useState(null);
+
+    // Wrap critical operations in try-catch
+    useEffect(() => {
+        try {
+            if (sessionInfo) {
+                fetchVehicles();
+            }
+        } catch (error) {
+            console.error('Error in VehicleMap useEffect:', error);
+            setComponentError('Failed to initialize component');
+        }
+    }, [sessionInfo]);
+
+    // Safe vehicle selection handler
+    const handleSelectChange = (e) => {
+        try {
+            const selectedId = e?.target?.value;
+            if (selectedId !== undefined) {
+                setCurrentSelectedId(selectedId);
+                if (onVehicleSelect && typeof onVehicleSelect === 'function') {
+                    onVehicleSelect(selectedId);
+                }
+            }
+        } catch (error) {
+            console.error('Error in handleSelectChange:', error);
+            setVehiclesError('Error selecting vehicle. Please refresh the page.');
+        }
+    };
+
+    // Add error state rendering at the top of your return statement:
+    if (componentError) {
+        return (
+            <div style={commonStyles?.form || {}}>
+                <h2>Vehicle Location & Geofences</h2>
+                <div style={{ 
+                    padding: '20px', 
+                    backgroundColor: '#f8d7da', 
+                    border: '1px solid #f5c6cb', 
+                    borderRadius: '4px',
+                    color: '#721c24'
+                }}>
+                    <p><strong>Error:</strong> {componentError}</p>
+                    <button 
+                        onClick={() => {
+                            setComponentError(null);
+                            window.location.reload();
+                        }}
+                        style={{
+                            backgroundColor: '#dc3545',
+                            color: 'white',
+                            border: 'none',
+                            padding: '8px 16px',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Refresh Page
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // Continue with your existing component logic...
+}
     // Vehicle selector states
     const [vehicles, setVehicles] = useState([]);
     const [isLoadingVehicles, setIsLoadingVehicles] = useState(true);

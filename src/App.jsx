@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import AuthForm from './components/AuthForm';
-import VehicleMap from './components/VehicleMap'; // <<< NEW: Import VehicleMap
-import PastTripsCard from './components/PastTripsCard'; // Add this import
+import VehicleMap from './components/VehicleMap';
+import PastTripsCard from './components/PastTripsCard';
+import ErrorBoundary from './components/ErrorBoundary'; // Import ErrorBoundary
 import axios from 'axios';
 import './App.css'; 
 import L from 'leaflet';
@@ -25,7 +26,7 @@ function App() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
     const [selectedVehicleId, setSelectedVehicleId] = useState(null);
-    const [selectedTrip, setSelectedTrip] = useState(null); // Add this state
+    const [selectedTrip, setSelectedTrip] = useState(null);
 
     const handleLogin = async ({ username, password, database, server }) => {
         setIsLoading(true);
@@ -90,61 +91,83 @@ function App() {
         setSelectedVehicleId(vehicleId);
     };
 
+    const handleLogout = () => {
+        setIsAuthenticated(false);
+        setSessionInfo(null);
+        setSelectedVehicleId(null);
+        setSelectedTrip(null);
+    };
+
     return (
-        <div style={appStyles.container}>
-            {!isAuthenticated ? (
-                <AuthForm onLogin={handleLogin} isLoading={isLoading} error={error} />
-            ) : (
-                <div style={appStyles.authenticatedContent}>
-                    <h1>Welcome, {sessionInfo.userName}!</h1>
-                    <p>Logged into database: {sessionInfo.database}</p>
-
-                    {/* VehicleMap now includes the vehicle selector */}
-                    <VehicleMap 
-                        sessionInfo={sessionInfo} 
-                        onVehicleSelect={handleVehicleSelected}
-                        selectedVehicleId={selectedVehicleId}
-                        commonStyles={{ 
-                            form: { ...appStyles.form, marginTop: '20px', maxWidth: '700px' },
-                            error: appStyles.error,
-                            inputGroup: appStyles.inputGroup,
-                            label: appStyles.label,
-                            input: appStyles.input,
-                            button: appStyles.button,
-                        }}
-                        selectedTrip={selectedTrip} // Pass selectedTrip to VehicleMap
-                    />
-
-                    {/* PastTripsCard, full width */}
-                    {selectedVehicleId && (
-                        <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '1em', alignItems: 'stretch' }}>
-                            <PastTripsCard
-                                selectedVehicleId={selectedVehicleId}
-                                sessionInfo={sessionInfo}
-                                onTripSelect={setSelectedTrip}
-                                commonStyles={{
-                                    ...appStyles,
-                                    form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
-                                }}
-                            />
-                        </div>
-                    )}
-
-                    {/* Logout button is now below PastTripsCard */}
-                    <button 
-                        onClick={() => {
-                            setIsAuthenticated(false);
-                            setSessionInfo(null);
-                            setSelectedVehicleId(null);
-                            setSelectedTrip(null);
-                        }} 
-                        style={appStyles.logoutButton}
+        <ErrorBoundary 
+            fallbackMessage="Something went wrong with the application. Please refresh the page or try logging in again."
+            showDetails={true}
+        >
+            <div style={appStyles.container}>
+                {!isAuthenticated ? (
+                    <ErrorBoundary 
+                        fallbackMessage="There was an issue with the login form. Please refresh the page and try again."
+                        showDetails={false}
                     >
-                        Logout
-                    </button>
-                </div>
-            )}
-        </div>
+                        <AuthForm onLogin={handleLogin} isLoading={isLoading} error={error} />
+                    </ErrorBoundary>
+                ) : (
+                    <div style={appStyles.authenticatedContent}>
+                        <h1>Welcome, {sessionInfo.userName}!</h1>
+                        <p>Logged into database: {sessionInfo.database}</p>
+
+                        {/* Wrap VehicleMap in ErrorBoundary */}
+                        <ErrorBoundary 
+                            fallbackMessage="There was an issue loading the vehicle map. Please try refreshing or selecting a different vehicle."
+                            showDetails={false}
+                        >
+                            <VehicleMap 
+                                sessionInfo={sessionInfo} 
+                                onVehicleSelect={handleVehicleSelected}
+                                selectedVehicleId={selectedVehicleId}
+                                commonStyles={{ 
+                                    form: { ...appStyles.form, marginTop: '20px', maxWidth: '700px' },
+                                    error: appStyles.error,
+                                    inputGroup: appStyles.inputGroup,
+                                    label: appStyles.label,
+                                    input: appStyles.input,
+                                    button: appStyles.button,
+                                }}
+                                selectedTrip={selectedTrip}
+                            />
+                        </ErrorBoundary>
+
+                        {/* Wrap PastTripsCard in ErrorBoundary */}
+                        {selectedVehicleId && (
+                            <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', gap: '1em', alignItems: 'stretch' }}>
+                                <ErrorBoundary 
+                                    fallbackMessage="There was an issue loading the past trips. Please try selecting the vehicle again or refresh the page."
+                                    showDetails={false}
+                                >
+                                    <PastTripsCard
+                                        selectedVehicleId={selectedVehicleId}
+                                        sessionInfo={sessionInfo}
+                                        onTripSelect={setSelectedTrip}
+                                        commonStyles={{
+                                            ...appStyles,
+                                            form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
+                                        }}
+                                    />
+                                </ErrorBoundary>
+                            </div>
+                        )}
+
+                        {/* Logout button */}
+                        <button 
+                            onClick={handleLogout}
+                            style={appStyles.logoutButton}
+                        >
+                            Logout
+                        </button>
+                    </div>
+                )}
+            </div>
+        </ErrorBoundary>
     );
 }
 
@@ -167,19 +190,19 @@ const appStyles = {
         padding: '2vw',
         borderRadius: '8px',
         boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
-        width: 'fit-content', // Dynamically fit content width
-        maxWidth: '90vw',    // Prevent overflow on large screens
+        width: 'fit-content',
+        maxWidth: '90vw',
         minWidth: '260px',
         boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        maxHeight: '90vh', // Prevent overflow on small screens
-        overflowY: 'auto', // Allow scrolling if content exceeds height
+        maxHeight: '90vh',
+        overflowY: 'auto',
     },
     logoutButton: {
         padding: '0.7em 1em',
-        backgroundColor: '#dc3545', // Red color for logout
+        backgroundColor: '#dc3545',
         color: 'white',
         border: 'none',
         borderRadius: '4px',
@@ -194,23 +217,22 @@ const appStyles = {
         border: '1px solid #ddd',
         borderRadius: '8px',
         backgroundColor: '#f8f9fa',
-        width: '80%', // Adjust width as needed
+        width: '80%',
         textAlign: 'center',
     },
-    // Common form styles (copied from your AuthForm styles)
-    form: { // This will now be used for grouping elements like the selector and map
-        backgroundColor: '#fff', // This background might be redundant if authenticatedContent also has it
+    form: {
+        backgroundColor: '#fff',
         color: '#213547',
-        padding: '2vw', // Use slightly less padding here or adjust as needed
+        padding: '2vw',
         borderRadius: '8px',
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)', // Lighter shadow
+        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)',
         width: '100%',
-        maxWidth: '400px', // Keep max-width for selector
+        maxWidth: '400px',
         minWidth: '260px',
         boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
-        marginTop: '20px', // Space from logout button
+        marginTop: '20px',
     },
     inputGroup: {
         marginBottom: '1.2em',
@@ -221,7 +243,7 @@ const appStyles = {
         fontWeight: 'bold',
         color: '#213547',
     },
-    input: { // This applies to standard text inputs and selects
+    input: {
         width: '100%',
         padding: '0.7em',
         border: '1px solid #ddd',
@@ -229,7 +251,7 @@ const appStyles = {
         boxSizing: 'border-box',
         fontSize: '1em',
     },
-    button: { // This applies to general buttons like "Get Devices" in selector
+    button: {
         width: '100%',
         padding: '0.7em 1em',
         backgroundColor: '#646cff',
@@ -251,6 +273,5 @@ const appStyles = {
         textAlign: 'center',
     },
 };
-
 
 export default App;
