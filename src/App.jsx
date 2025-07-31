@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import AuthForm from './components/AuthForm';
 import VehicleMap from './components/VehicleMap';
 import PastTripsCard from './components/PastTripsCard';
+import GForceChart from './components/GForceChart';
 import ErrorBoundary from './components/ErrorBoundary'; // Import ErrorBoundary
 import axios from 'axios';
 import './App.css'; 
@@ -148,6 +149,25 @@ function App() {
                                         selectedVehicleId={selectedVehicleId}
                                         sessionInfo={sessionInfo}
                                         onTripSelect={setSelectedTrip}
+                                        commonStyles={{
+                                            ...appStyles,
+                                            form: { ...appStyles.form, width: '100%', maxWidth: '100%' },
+                                        }}
+                                    />
+                                </ErrorBoundary>
+                            </div>
+                        )}
+
+                        {/* G-Force Chart Component - appears when trip is selected */}
+                        {selectedTrip && (
+                            <div style={{ width: '100%', maxWidth: '700px', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+                                <ErrorBoundary 
+                                    fallbackMessage="There was an issue loading the G-Force chart. The accelerometer data may not be available for this vehicle or trip."
+                                    showDetails={false}
+                                >
+                                    <GForceChart
+                                        selectedTrip={selectedTrip}
+                                        sessionInfo={sessionInfo}
                                         commonStyles={{
                                             ...appStyles,
                                             form: { ...appStyles.form, width: '100%', maxWidth: '100%' },

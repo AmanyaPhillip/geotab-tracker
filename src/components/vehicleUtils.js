@@ -384,3 +384,239 @@ export async function calculateFuelEfficiency(sessionInfo, deviceId, hours = 24)
 
     return null;
 }
+
+/**
+ * Fetches accelerometer data for a given device and time period.
+ * @param {object} sessionInfo - Geotab session information.
+ * @param {string} deviceId - The ID of the device.
+ * @param {string} fromDate - Start date in ISO format.
+ * @param {string} toDate - End date in ISO format.
+ * @returns {Promise<Array>} A promise that resolves to an array of accelerometer readings.
+ */
+export async function fetchAccelerometerData(sessionInfo, deviceId, fromDate, toDate) {
+    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+
+    try {
+        // Use MultiCall to fetch accelerometer data from multiple diagnostics simultaneously
+        const response = await axios.post(apiUrl, {
+            jsonrpc: '2.0',
+            method: 'MultiCall',
+            params: {
+                calls: [
+                    // X-axis (Forward/Reverse acceleration)
+                    {
+                        method: 'Get',
+                        params: {
+                            typeName: 'StatusData',
+                            search: {
+                                deviceSearch: { id: deviceId },
+                                diagnosticSearch: { id: 'DiagnosticAccelerometerForwardGId' },
+                                fromDate: fromDate,
+                                toDate: toDate
+                            }
+                        }
+                    },
+                    // Y-axis (Left/Right acceleration) 
+                    {
+                        method: 'Get',
+                        params: {
+                            typeName: 'StatusData',
+                            search: {
+                                deviceSearch: { id: deviceId },
+                                diagnosticSearch: { id: 'DiagnosticAccelerometerRightGId' },
+                                fromDate: fromDate,
+                                toDate: toDate
+                            }
+                        }
+                    },
+                    // Z-axis (Up/Down acceleration)
+                    {
+                        method: 'Get',
+                        params: {
+                            typeName: 'StatusData',
+                            search: {
+                                deviceSearch: { id: deviceId },
+                                diagnosticSearch: { id: 'DiagnosticAccelerometerUpGId' },
+                                fromDate: fromDate,
+                                toDate: toDate
+                            }
+                        }
+                    }
+                ],
+                credentials: {
+                    database: sessionInfo.database,
+                    userName: sessionInfo.userName,
+                    sessionId: sessionInfo.sessionId,
+                }
+            },
+            id: Math.floor(Math.random() * 10000),
+        }, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 60000 // 60 second timeout for potentially large datasets
+        });
+
+        const results = response.data.result;
+
+        if (!results || results.length < 3) {
+            console.warn('Incomplete accelerometer data received');
+            return [];
+        }
+
+        const [xAxisData, yAxisData, zAxisData] = results;
+
+        // If no data is available, try alternative diagnostic IDs
+        if (!xAxisData.length && !yAxisData.length && !zAxisData.length) {
+            return await fetchAccelerometerDataAlternative(sessionInfo, deviceId, fromDate, toDate);
+        }
+
+        // Combine the data from all three axes by timestamp
+        const combinedData = combineAccelerometerData(xAxisData, yAxisData, zAxisData);
+
+        return combinedData;
+
+    } catch (err) {
+        console.error('Error fetching accelerometer data:', err);
+        
+        // Try alternative method if primary fails
+        try {
+            return await fetchAccelerometerDataAlternative(sessionInfo, deviceId, fromDate, toDate);
+        } catch (altErr) {
+            console.error('Alternative accelerometer fetch also failed:', altErr);
+            throw new Error(`Failed to fetch accelerometer data: ${err.message}`);
+        }
+    }
+}
+
+/**
+ * Alternative method to fetch accelerometer data using different diagnostic IDs.
+ * @param {object} sessionInfo - Geotab session information.
+ * @param {string} deviceId - The ID of the device.
+ * @param {string} fromDate - Start date in ISO format.
+ * @param {string} toDate - End date in ISO format.
+ * @returns {Promise<Array>} A promise that resolves to an array of accelerometer readings.
+ */
+async function fetchAccelerometerDataAlternative(sessionInfo, deviceId, fromDate, toDate) {
+    const apiUrl = `https://${sessionInfo.server}/apiv1/`;
+
+    const alternativeDiagnostics = [
+        'DiagnosticAccelerometerReverseGId',
+        'DiagnosticAccelerometerLeftGId', 
+        'DiagnosticAccelerometerDownGId',
+        // Generic accelerometer diagnostics
+        'DiagnosticAccelerationForwardBrakingId',
+        'DiagnosticAccelerationSidewaysLeftId',
+        'DiagnosticAccelerationSidewaysRightId'
+    ];
+
+    try {
+        const response = await axios.post(apiUrl, {
+            jsonrpc: '2.0',
+            method: 'MultiCall',
+            params: {
+                calls: alternativeDiagnostics.map(diagId => ({
+                    method: 'Get',
+                    params: {
+                        typeName: 'StatusData',
+                        search: {
+                            deviceSearch: { id: deviceId },
+                            diagnosticSearch: { id: diagId },
+                            fromDate: fromDate,
+                            toDate: toDate
+                        }
+                    }
+                })),
+                credentials: {
+                    database: sessionInfo.database,
+                    userName: sessionInfo.userName,
+                    sessionId: sessionInfo.sessionId,
+                }
+            },
+            id: Math.floor(Math.random() * 10000),
+        }, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 60000
+        });
+
+        const results = response.data.result;
+        
+        if (!results || results.length === 0) {
+            return [];
+        }
+
+        // Find the diagnostic with the most data
+        const bestResult = results.reduce((best, current) => 
+            current.length > best.length ? current : best, results[0] || []);
+
+        // Convert single-axis data to three-axis format
+        return bestResult.map(reading => ({
+            dateTime: reading.dateTime,
+            accelerationX: reading.data || 0, // Use available data as X-axis
+            accelerationY: 0, // Default other axes to 0
+            accelerationZ: 0
+        }));
+
+    } catch (err) {
+        console.error('Alternative accelerometer fetch failed:', err);
+        return [];
+    }
+}
+
+/**
+ * Combines accelerometer data from three axes into a single dataset.
+ * @param {Array} xAxisData - X-axis acceleration data.
+ * @param {Array} yAxisData - Y-axis acceleration data.
+ * @param {Array} zAxisData - Z-axis acceleration data.
+ * @returns {Array} Combined accelerometer data.
+ */
+function combineAccelerometerData(xAxisData, yAxisData, zAxisData) {
+    // Create a map to store readings by timestamp
+    const readingsMap = new Map();
+
+    // Process X-axis data
+    xAxisData.forEach(reading => {
+        const timestamp = reading.dateTime;
+        if (!readingsMap.has(timestamp)) {
+            readingsMap.set(timestamp, {
+                dateTime: timestamp,
+                accelerationX: 0,
+                accelerationY: 0,
+                accelerationZ: 0
+            });
+        }
+        readingsMap.get(timestamp).accelerationX = reading.data || 0;
+    });
+
+    // Process Y-axis data
+    yAxisData.forEach(reading => {
+        const timestamp = reading.dateTime;
+        if (!readingsMap.has(timestamp)) {
+            readingsMap.set(timestamp, {
+                dateTime: timestamp,
+                accelerationX: 0,
+                accelerationY: 0,
+                accelerationZ: 0
+            });
+        }
+        readingsMap.get(timestamp).accelerationY = reading.data || 0;
+    });
+
+    // Process Z-axis data
+    zAxisData.forEach(reading => {
+        const timestamp = reading.dateTime;
+        if (!readingsMap.has(timestamp)) {
+            readingsMap.set(timestamp, {
+                dateTime: timestamp,
+                accelerationX: 0,
+                accelerationY: 0,
+                accelerationZ: 0
+            });
+        }
+        readingsMap.get(timestamp).accelerationZ = reading.data || 0;
+    });
+
+    // Convert map to array and sort by timestamp
+    const combinedData = Array.from(readingsMap.values())
+        .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime));
+
+    return combinedData;
+}
