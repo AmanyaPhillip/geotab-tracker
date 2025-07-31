@@ -1,12 +1,52 @@
-# React + Vite
+Geotab Tracker
+This project is a real-time vehicle tracking application that uses the Geotab API to display vehicle locations on a map. It's built with modern web technologies and provides a user-friendly interface for monitoring your fleet.
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Features
+Real-time Vehicle Tracking: View the live location of your vehicles on a map.
 
-Currently, two official plugins are available:
+Vehicle History: See a trail of where your vehicles have been.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Exception Reporting: Get alerts for events like harsh braking, speeding, and after-hours usage.
 
-## Expanding the ESLint configuration
+Responsive Design: The application is designed to work on both desktop and mobile devices.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Getting Started
+These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+
+Prerequisites
+Node.js and npm
+
+A Geotab account with API access
+
+Installation
+Clone the repository:
+
+git clone https://github.com/AmanyaPhillip/geotab-tracker.git
+Install dependencies:
+
+npm install
+Configure your Geotab API credentials:
+
+Create a .env file in the root of the project and add your Geotab API credentials:
+
+GEOTAB_SERVER=my.geotab.com
+GEOTAB_DATABASE=your_database_name
+GEOTAB_USER=your_username
+GEOTAB_PASSWORD=your_password
+Start the development server:
+
+npm start
+The application will now be running at http://localhost:3000.
+
+Built With
+React - The web framework used
+
+Leaflet - For interactive maps
+
+Geotab API - To fetch vehicle data
+
+Contributing
+Please read CONTRIBUTING.md for details on our code of conduct, and the process for submitting pull requests to us.
+
+License
+This project is licensed under the MIT License - see the LICENSE.md file for details.
