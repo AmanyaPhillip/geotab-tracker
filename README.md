@@ -16,8 +16,6 @@
 ![Recharts](https://img.shields.io/badge/Recharts-Analytics-FF6384?style=for-the-badge&logo=chartdotjs&logoColor=white)
 ![Geotab API](https://img.shields.io/badge/Geotab-API-007AC2?style=for-the-badge&logo=googlemaps&logoColor=white)
 
-</div>
-
 ---
 
 ## 📖 Overview
@@ -32,13 +30,9 @@ Built as a modern single-page app with **React 19** and **Vite**, with maps powe
 
 ## 📸 Preview
 
-<div align="center">
-
 ![Geotab Tracker dashboard — live map, trip history, and G-force analytics](./screenshot.png.png)
 
 <sub>Dashboard view: live vehicle map, past-trip history, and per-trip G-force analytics.</sub>
-
-</div>
 
 ---
 
@@ -56,8 +50,6 @@ Built as a modern single-page app with **React 19** and **Vite**, with maps powe
 
 ## 🛠️ Tech Stack
 
-<div align="center">
-
 | Layer | Technology |
 |---|---|
 | **Framework** | React 19 + Vite 7 |
@@ -65,8 +57,6 @@ Built as a modern single-page app with **React 19** and **Vite**, with maps powe
 | **Charts** | Recharts |
 | **HTTP / Data** | Axios → Geotab API |
 | **Tooling** | ESLint, gh-pages |
-
-</div>
 
 ---
 
@@ -183,7 +173,7 @@ Distributed under the **GPL-3.0** License. See [`LICENSE`](./LICENSE) for detail
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/phillip-amanya/)
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/AmanyaPhillip)
 
-<div align="center">
+<br/>
 
 ⭐ If you find this project useful, consider giving it a star!
 
