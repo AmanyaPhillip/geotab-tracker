@@ -30,7 +30,7 @@ Built as a modern single-page app with **React 19** and **Vite**, with maps powe
 
 ## 📸 Preview
 
-![Geotab Tracker dashboard — live map, trip history, and G-force analytics](./screenshot.png.png)
+![Geotab Tracker dashboard — live map, trip history, and G-force analytics](./screenshot.png)
 
 <sub>Dashboard view: live vehicle map, past-trip history, and per-trip G-force analytics.</sub>
 
@@ -135,6 +135,7 @@ npm run deploy
 
 The Vite `base` is set to `/geotab-tracker/` so asset paths resolve correctly on Pages. Live build: **[amanyaphillip.github.io/geotab-tracker](https://amanyaphillip.github.io/geotab-tracker/)**
 
+<<<<<<< HEAD
 ---
 
 ## 🗺️ Roadmap
@@ -178,3 +179,6 @@ Distributed under the **GPL-3.0** License. See [`LICENSE`](./LICENSE) for detail
 ⭐ If you find this project useful, consider giving it a star!
 
 </div>
+=======
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+>>>>>>> parent of 28fde4f (docs: add tech-stack + license badges)
