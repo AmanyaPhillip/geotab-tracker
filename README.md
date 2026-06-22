@@ -69,3 +69,5 @@ src/
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+![React](https://img.shields.io/badge/React-19-blue) ![License](https://img.shields.io/github/license/AmanyaPhillip/geotab-tracker)
